@@ -53,10 +53,12 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # Build Options and Customizations
 #--------------------------------------------------------------------------------
 # These options allow developers to tailor the build to their specific hardware
-# and development needs, such as enabling or disabling specific GPU backends.
-option(TK_ENABLE_GPU "Master switch to enable any GPU backend" ON)
-option(TK_ENABLE_CUDA "Enable NVIDIA CUDA support for GPU acceleration" ON)
-option(TK_ENABLE_METAL "Enable Apple Metal support for GPU acceleration (macOS/iOS)" ON)
+# and development needs. For an easier, interactive configuration, please run
+# the `scripts/configure_build.sh` script from your build directory.
+
+option(TK_ENABLE_GPU "Master switch to enable any GPU backend" OFF)
+option(TK_ENABLE_CUDA "Enable NVIDIA CUDA support for GPU acceleration" OFF)
+option(TK_ENABLE_METAL "Enable Apple Metal support for GPU acceleration (macOS/iOS)" OFF)
 option(TK_ENABLE_ROCM "Enable AMD ROCm support for GPU acceleration" OFF)
 option(TK_BUILD_TESTS "Build unit and integration tests" ON)
 option(TK_BUILD_BENCHMARKS "Build performance benchmarks" ON)
@@ -139,7 +141,7 @@ if(TK_ENABLE_ROCM)
 endif()
 
 # Vulkan Backend Configuration
-option(TK_ENABLE_VULKAN "Enable Vulkan support for GPU acceleration" ON)
+option(TK_ENABLE_VULKAN "Enable Vulkan support for GPU acceleration" OFF)
 if(TK_ENABLE_VULKAN)
     find_package(Vulkan REQUIRED)
     if(Vulkan_FOUND)
@@ -152,7 +154,7 @@ if(TK_ENABLE_VULKAN)
 endif()
 
 # OpenGL ES Backend Configuration
-option(TK_ENABLE_GLES "Enable OpenGL ES support for GPU acceleration" ON)
+option(TK_ENABLE_GLES "Enable OpenGL ES support for GPU acceleration" OFF)
 if(TK_ENABLE_GLES)
     find_package(EGL REQUIRED)
     find_package(GLESv3 REQUIRED)
@@ -166,7 +168,7 @@ if(TK_ENABLE_GLES)
 endif()
 
 # OpenCL Backend Configuration
-option(TK_ENABLE_OPENCL "Enable OpenCL support for GPU acceleration" ON)
+option(TK_ENABLE_OPENCL "Enable OpenCL support for GPU acceleration" OFF)
 if(TK_ENABLE_OPENCL)
     find_package(OpenCL REQUIRED)
     if(OpenCL_FOUND)
@@ -179,7 +181,7 @@ if(TK_ENABLE_OPENCL)
 endif()
 
 # Android NNAPI Backend Configuration
-option(TK_ENABLE_NNAPI "Enable Android NNAPI support for model acceleration" ON)
+option(TK_ENABLE_NNAPI "Enable Android NNAPI support for model acceleration" OFF)
 if(ANDROID AND TK_ENABLE_NNAPI)
     # NNAPI is part of the Android NDK, found with the toolchain.
     # We just need to link against the `neuralnetworks` library.
