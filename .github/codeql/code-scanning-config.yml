@@ -1,0 +1,17 @@
+# .github/codeql/code-scanning-config.yml
+
+name: "Code Scanning Configuration"
+
+
+queries:
+  - uses: security-and-quality
+  - uses: security-extended
+
+
+paths-ignore:
+  - '.docs/'
+  - 'examples/'
+  - 'tests/'
+  - 'ci/'
+
+
