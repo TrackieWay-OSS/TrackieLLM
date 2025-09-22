@@ -41,6 +41,7 @@ members = [
     "src/utils",
     "src/vision",
     "src/workers",
+    "tests/rust_tests",
 ]
 
 # Workspace-wide dependencies can be defined here to ensure all crates use the

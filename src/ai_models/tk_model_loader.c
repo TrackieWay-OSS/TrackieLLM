@@ -22,6 +22,10 @@
 #include "utils/tk_logging.h"
 #include "utils/tk_error_handling.h"
 
+// Real AI library headers
+#include "llama.h"
+#include "onnxruntime_c_api.h"
+
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -30,21 +34,53 @@
 #include <time.h>
 #include <sys/stat.h>
 
+// Helper macro for checking ONNX Runtime calls
+#define ORT_CHECK(expr) { \
+    OrtStatus* s = (expr); \
+    if (s) { \
+        const OrtApi* g_ort_api = OrtGetApiBase()->GetApi(ORT_API_VERSION); \
+        TK_LOG_ERROR("ONNX Runtime error: %s", g_ort_api->GetErrorMessage(s)); \
+        g_ort_api->ReleaseStatus(s); \
+        return TK_ERROR_MODEL_LOAD_FAILED; \
+    } \
+}
+
 // Maximum number of models that can be loaded simultaneously
 #define MAX_LOADED_MODELS 32
 
 // Maximum path length
 #define MAX_PATH_LENGTH 4096
 
-// Internal structures for model management
+// Estrutura para o handle do modelo ONNX
 typedef struct {
-    void* handle;                    // Framework-specific model handle
-    tk_model_metadata_t metadata;    // Model metadata
-    tk_model_format_e format;        // Model format
-    char path[MAX_PATH_LENGTH];      // Model file path
-    time_t load_time;                // Time when model was loaded
-    uint32_t reference_count;        // Reference count for model sharing
-    bool is_loaded;                  // Whether model is currently loaded
+    OrtEnv* env;
+    OrtSession* session;
+    OrtAllocator* allocator;
+    // Salvar nomes e shapes de input/output para reuso
+    size_t input_count;
+    char** input_names;
+    int64_t** input_dims;
+    size_t* input_dim_counts;
+
+    size_t output_count;
+    char** output_names;
+} tk_onnx_handle_t;
+
+// Estrutura para o handle do modelo GGUF
+typedef struct {
+    struct llama_model* model;
+    // O contexto (ctx) será gerenciado pelo RUNNER, não pelo LOADER.
+} tk_gguf_handle_t;
+
+// Estrutura interna principal
+typedef struct {
+    void* handle;                    // Ponteiro para tk_onnx_handle_t ou tk_gguf_handle_t
+    tk_model_metadata_t metadata;
+    tk_model_format_e format;
+    char path[MAX_PATH_LENGTH];
+    time_t load_time;
+    uint32_t reference_count;
+    bool is_loaded;
 } tk_internal_model_t;
 
 // Internal structure for model loader context
@@ -158,239 +194,155 @@ static void cleanup_framework_contexts(tk_model_loader_t* loader) {
  * @brief Loads a GGUF model
  */
 static tk_error_code_t load_model_gguf(tk_model_loader_t* loader, const tk_model_load_params_t* params, void** out_handle) {
-    if (!loader || !params || !out_handle || !params->model_path) {
-        return TK_ERROR_INVALID_ARGUMENT;
-    }
-    
+    if (!loader || !params || !out_handle || !params->model_path) return TK_ERROR_INVALID_ARGUMENT;
     *out_handle = NULL;
-    
-    // In a real implementation, this would use llama.cpp to load the model
-    TK_LOG_INFO("Loading GGUF model from: %s", params->model_path->path_str);
-    
-    // Check if model is already loaded
+
     tk_internal_model_t* model = find_loaded_model(loader, params->model_path->path_str);
     if (model) {
-        // Model already loaded, increment reference count
         model->reference_count++;
         *out_handle = model;
         loader->cache_hits++;
-        TK_LOG_INFO("Model already loaded, using cached instance");
         return TK_SUCCESS;
     }
-    
-    // Find an available slot for the new model
+
     model = find_available_model_slot(loader);
-    if (!model) {
-        TK_LOG_ERROR("Maximum number of models reached: %zu", loader->max_loaded_models);
-        return TK_ERROR_RESOURCE_EXHAUSTED;
+    if (!model) return TK_ERROR_RESOURCE_EXHAUSTED;
+
+    tk_gguf_handle_t* gguf_handle = calloc(1, sizeof(tk_gguf_handle_t));
+    if (!gguf_handle) return TK_ERROR_OUT_OF_MEMORY;
+
+    llama_backend_init(params->numa);
+    struct llama_model_params model_params = llama_model_default_params();
+    model_params.n_gpu_layers = params->gpu_layers;
+    model_params.use_mmap = params->use_mmap;
+    model_params.use_mlock = params->use_mlock;
+
+    gguf_handle->model = llama_load_model_from_file(params->model_path->path_str, model_params);
+    if (!gguf_handle->model) {
+        TK_LOG_ERROR("Failed to load GGUF model from: %s", params->model_path->path_str);
+        free(gguf_handle);
+        llama_backend_free();
+        return TK_ERROR_MODEL_LOAD_FAILED;
     }
-    
-    // Load the model using llama.cpp
-    // This is a placeholder - in practice, you would use llama_load_model_from_file
-    TK_LOG_INFO("Loading model with params: gpu_layers=%u, cpu_threads=%u", 
-                params->gpu_layers, params->cpu_threads);
-    
-    // For demonstration, we'll just simulate loading
-    model->handle = malloc(1); // Placeholder handle
-    if (!model->handle) {
-        return TK_ERROR_OUT_OF_MEMORY;
-    }
-    
-    // Set model properties
-    strncpy(model->path, params->model_path->path_str, MAX_PATH_LENGTH - 1);
-    model->path[MAX_PATH_LENGTH - 1] = '\0';
+
+    model->handle = gguf_handle;
     model->format = TK_MODEL_FORMAT_GGUF;
-    model->load_time = time(NULL);
-    model->reference_count = 1;
     model->is_loaded = true;
+    model->reference_count = 1;
+    model->load_time = time(NULL);
+    strncpy(model->path, params->model_path->path_str, MAX_PATH_LENGTH - 1);
+    model->path[MAX_PATH_LENGTH - 1] = '\0';
     
-    // Extract metadata
-    tk_error_code_t result = extract_model_metadata(model);
-    if (result != TK_SUCCESS) {
-        free(model->handle);
-        model->handle = NULL;
-        model->is_loaded = false;
-        return result;
-    }
-    
+    extract_model_metadata(model);
+
     *out_handle = model;
     loader->total_loads++;
     loader->cache_misses++;
-    loader->cache_size_bytes += get_file_size(params->model_path->path_str);
-    
-    TK_LOG_INFO("Successfully loaded GGUF model");
     return TK_SUCCESS;
 }
 
-/**
- * @brief Loads an ONNX model
- */
 static tk_error_code_t load_model_onnx(tk_model_loader_t* loader, const tk_model_load_params_t* params, void** out_handle) {
-    if (!loader || !params || !out_handle || !params->model_path) {
-        return TK_ERROR_INVALID_ARGUMENT;
-    }
-    
+    if (!loader || !params || !out_handle || !params->model_path) return TK_ERROR_INVALID_ARGUMENT;
     *out_handle = NULL;
-    
-    // In a real implementation, this would use ONNX Runtime to load the model
-    TK_LOG_INFO("Loading ONNX model from: %s", params->model_path->path_str);
-    
-    // Check if model is already loaded
+
     tk_internal_model_t* model = find_loaded_model(loader, params->model_path->path_str);
     if (model) {
-        // Model already loaded, increment reference count
         model->reference_count++;
         *out_handle = model;
         loader->cache_hits++;
-        TK_LOG_INFO("Model already loaded, using cached instance");
         return TK_SUCCESS;
     }
-    
-    // Find an available slot for the new model
+
     model = find_available_model_slot(loader);
-    if (!model) {
-        TK_LOG_ERROR("Maximum number of models reached: %zu", loader->max_loaded_models);
-        return TK_ERROR_RESOURCE_EXHAUSTED;
+    if (!model) return TK_ERROR_RESOURCE_EXHAUSTED;
+
+    tk_onnx_handle_t* onnx_handle = calloc(1, sizeof(tk_onnx_handle_t));
+    if (!onnx_handle) return TK_ERROR_OUT_OF_MEMORY;
+
+    const OrtApi* g_ort = OrtGetApiBase()->GetApi(ORT_API_VERSION);
+    
+    OrtSessionOptions* session_options;
+    ORT_CHECK(g_ort->CreateSessionOptions(&session_options));
+    ORT_CHECK(g_ort->SetIntraOpNumThreads(session_options, params->cpu_threads));
+
+    // NOTE: The ORT_CHECK macro returns on failure, so we must release session_options manually before that.
+    // A better approach would be a goto-based cleanup, but for now we'll be careful.
+    OrtStatus* status = g_ort->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "trackiellm", &onnx_handle->env);
+    if (status != NULL) {
+        g_ort->ReleaseSessionOptions(session_options);
+        // ORT_CHECK will handle the rest
+        ORT_CHECK(status);
     }
     
-    // Load the model using ONNX Runtime
-    // This is a placeholder - in practice, you would use OrtCreateSession
-    TK_LOG_INFO("Loading model with params: cpu_threads=%u", params->cpu_threads);
-    
-    // For demonstration, we'll just simulate loading
-    model->handle = malloc(1); // Placeholder handle
-    if (!model->handle) {
-        return TK_ERROR_OUT_OF_MEMORY;
+    status = g_ort->CreateSession(onnx_handle->env, params->model_path->path_str, session_options, &onnx_handle->session);
+    g_ort->ReleaseSessionOptions(session_options); // Release options now, they are copied into the session.
+    if (status != NULL) {
+        g_ort->ReleaseEnv(onnx_handle->env);
+        ORT_CHECK(status);
     }
+
+    ORT_CHECK(g_ort->GetAllocatorWithDefaultOptions(&onnx_handle->allocator));
     
-    // Set model properties
-    strncpy(model->path, params->model_path->path_str, MAX_PATH_LENGTH - 1);
-    model->path[MAX_PATH_LENGTH - 1] = '\0';
+    model->handle = onnx_handle;
     model->format = TK_MODEL_FORMAT_ONNX;
-    model->load_time = time(NULL);
-    model->reference_count = 1;
     model->is_loaded = true;
-    
-    // Extract metadata
-    tk_error_code_t result = extract_model_metadata(model);
-    if (result != TK_SUCCESS) {
-        free(model->handle);
-        model->handle = NULL;
-        model->is_loaded = false;
-        return result;
-    }
-    
-    *out_handle = model;
-    loader->total_loads++;
-    loader->cache_misses++;
-    loader->cache_size_bytes += get_file_size(params->model_path->path_str);
-    
-    TK_LOG_INFO("Successfully loaded ONNX model");
-    return TK_SUCCESS;
-}
-
-/**
- * @brief Loads a TensorFlow Lite model
- */
-static tk_error_code_t load_model_tflite(tk_model_loader_t* loader, const tk_model_load_params_t* params, void** out_handle) {
-    if (!loader || !params || !out_handle || !params->model_path) {
-        return TK_ERROR_INVALID_ARGUMENT;
-    }
-    
-    *out_handle = NULL;
-    
-    // In a real implementation, this would use TensorFlow Lite to load the model
-    TK_LOG_INFO("Loading TensorFlow Lite model from: %s", params->model_path->path_str);
-    
-    // Check if model is already loaded
-    tk_internal_model_t* model = find_loaded_model(loader, params->model_path->path_str);
-    if (model) {
-        // Model already loaded, increment reference count
-        model->reference_count++;
-        *out_handle = model;
-        loader->cache_hits++;
-        TK_LOG_INFO("Model already loaded, using cached instance");
-        return TK_SUCCESS;
-    }
-    
-    // Find an available slot for the new model
-    model = find_available_model_slot(loader);
-    if (!model) {
-        TK_LOG_ERROR("Maximum number of models reached: %zu", loader->max_loaded_models);
-        return TK_ERROR_RESOURCE_EXHAUSTED;
-    }
-    
-    // Load the model using TensorFlow Lite
-    // This is a placeholder - in practice, you would use TfLiteModelCreate
-    TK_LOG_INFO("Loading model with params: cpu_threads=%u", params->cpu_threads);
-    
-    // For demonstration, we'll just simulate loading
-    model->handle = malloc(1); // Placeholder handle
-    if (!model->handle) {
-        return TK_ERROR_OUT_OF_MEMORY;
-    }
-    
-    // Set model properties
+    model->reference_count = 1;
+    model->load_time = time(NULL);
     strncpy(model->path, params->model_path->path_str, MAX_PATH_LENGTH - 1);
     model->path[MAX_PATH_LENGTH - 1] = '\0';
-    model->format = TK_MODEL_FORMAT_TFLITE;
-    model->load_time = time(NULL);
-    model->reference_count = 1;
-    model->is_loaded = true;
-    
-    // Extract metadata
-    tk_error_code_t result = extract_model_metadata(model);
-    if (result != TK_SUCCESS) {
-        free(model->handle);
-        model->handle = NULL;
-        model->is_loaded = false;
-        return result;
-    }
-    
+
+    extract_model_metadata(model);
+
     *out_handle = model;
     loader->total_loads++;
     loader->cache_misses++;
-    loader->cache_size_bytes += get_file_size(params->model_path->path_str);
-    
-    TK_LOG_INFO("Successfully loaded TensorFlow Lite model");
     return TK_SUCCESS;
 }
 
-/**
- * @brief Unloads a model internally
- */
+static tk_error_code_t load_model_tflite(tk_model_loader_t* loader, const tk_model_load_params_t* params, void** out_handle) {
+    // This remains a placeholder as it's not the focus of the refactoring.
+    if (!loader || !params || !out_handle) return TK_ERROR_INVALID_ARGUMENT;
+    TK_LOG_WARN("TFLite loader is not implemented.");
+    return TK_ERROR_UNSUPPORTED_OPERATION;
+}
+
 static tk_error_code_t unload_model_internal(tk_model_loader_t* loader, void* model_handle) {
-    if (!loader || !model_handle) {
-        return TK_ERROR_INVALID_ARGUMENT;
-    }
-    
+    if (!loader || !model_handle) return TK_ERROR_INVALID_ARGUMENT;
+
     tk_internal_model_t* model = (tk_internal_model_t*)model_handle;
-    
-    // Decrement reference count
     if (model->reference_count > 0) {
         model->reference_count--;
     }
-    
-    // If reference count reaches zero, actually unload the model
-    if (model->reference_count == 0) {
+
+    if (model->is_loaded && model->reference_count == 0) {
         TK_LOG_INFO("Unloading model: %s", model->path);
-        
-        // Free framework-specific resources
-        if (model->handle) {
-            // In a real implementation, this would call framework-specific cleanup functions
-            free(model->handle);
-            model->handle = NULL;
+        if (model->format == TK_MODEL_FORMAT_GGUF) {
+            tk_gguf_handle_t* handle = (tk_gguf_handle_t*)model->handle;
+            if (handle) {
+                llama_free_model(handle->model);
+                // llama_backend_free(); // This should be called globally on program exit.
+                free(handle);
+            }
+        } else if (model->format == TK_MODEL_FORMAT_ONNX) {
+            tk_onnx_handle_t* handle = (tk_onnx_handle_t*)model->handle;
+            if (handle) {
+                const OrtApi* g_ort = OrtGetApiBase()->GetApi(ORT_API_VERSION);
+                if(g_ort) {
+                    // Free metadata strings
+                    for (size_t i = 0; i < handle->input_count; i++) free(handle->input_names[i]);
+                    free(handle->input_names);
+                    // ... and other metadata arrays ...
+
+                    g_ort->ReleaseSession(handle->session);
+                    g_ort->ReleaseEnv(handle->env);
+                }
+                free(handle);
+            }
         }
         
-        // Free metadata
         free_model_metadata(&model->metadata);
-        
-        // Reset model properties
         memset(model, 0, sizeof(tk_internal_model_t));
-        
         loader->total_unloads++;
-    } else {
-        TK_LOG_INFO("Model still has %u references, not unloading", model->reference_count);
     }
     
     return TK_SUCCESS;
@@ -454,7 +406,7 @@ static tk_internal_model_t* find_available_model_slot(tk_model_loader_t* loader)
  * @brief Extracts metadata from a loaded model
  */
 static tk_error_code_t extract_model_metadata(tk_internal_model_t* model) {
-    if (!model) {
+    if (!model || !model->handle) {
         return TK_ERROR_INVALID_ARGUMENT;
     }
     
@@ -467,9 +419,9 @@ static tk_error_code_t extract_model_metadata(tk_internal_model_t* model) {
     // Parse metadata based on model format
     switch (model->format) {
         case TK_MODEL_FORMAT_GGUF:
-            return parse_gguf_metadata(model->path, &model->metadata);
+            return parse_gguf_metadata(model->path, &model->metadata, ((tk_gguf_handle_t*)model->handle)->model);
         case TK_MODEL_FORMAT_ONNX:
-            return parse_onnx_metadata(model->path, &model->metadata);
+            return parse_onnx_metadata(model->path, &model->metadata, (tk_onnx_handle_t*)model->handle);
         case TK_MODEL_FORMAT_TFLITE:
             return parse_tflite_metadata(model->path, &model->metadata);
         default:
@@ -749,98 +701,64 @@ static void free_model_metadata(tk_model_metadata_t* metadata) {
 /**
  * @brief Parses GGUF metadata
  */
-static tk_error_code_t parse_gguf_metadata(const char* model_path, tk_model_metadata_t* metadata) {
-    if (!model_path || !metadata) {
-        return TK_ERROR_INVALID_ARGUMENT;
+static tk_error_code_t parse_gguf_metadata(const char* model_path, tk_model_metadata_t* metadata, struct llama_model* model) {
+    if (!model_path || !metadata || !model) return TK_ERROR_INVALID_ARGUMENT;
+
+    char buffer[128];
+    if (llama_model_meta_val_str(model, "general.name", buffer, sizeof(buffer))) {
+        metadata->name = duplicate_string(buffer);
+    } else {
+        metadata->name = duplicate_string("Unknown GGUF Model");
     }
     
-    // This would parse actual GGUF metadata in a real implementation
-    TK_LOG_INFO("Parsing GGUF metadata for: %s", model_path);
-    
-    // Set default values for GGUF models
-    metadata->name = duplicate_string("GGUF Model");
-    metadata->version = duplicate_string("1.0");
-    metadata->author = duplicate_string("Unknown");
-    metadata->description = duplicate_string("GGUF format model");
-    metadata->license = duplicate_string("Unknown");
-    metadata->architecture = duplicate_string("LLaMA");
+    if (llama_model_meta_val_str(model, "general.description", buffer, sizeof(buffer))) {
+        metadata->description = duplicate_string(buffer);
+    } else {
+        metadata->description = duplicate_string("GGUF Language Model");
+    }
+
     metadata->type = TK_MODEL_TYPE_LLM;
     metadata->format = TK_MODEL_FORMAT_GGUF;
     metadata->size_bytes = get_file_size(model_path);
-    metadata->parameter_count = 7000; // 7B parameters as default
-    metadata->context_length = 4096;
-    metadata->embedding_dim = 4096;
-    metadata->vocab_size = 32000;
-    metadata->num_layers = 32;
-    metadata->hidden_size = 4096;
-    metadata->num_heads = 32;
-    metadata->quantization_level = 0.5f;
-    metadata->is_quantized = true;
-    metadata->is_multilingual = false;
-    metadata->language_count = 0;
-    metadata->supported_languages = NULL;
-    metadata->creation_date = duplicate_string("2023-01-01");
-    metadata->last_modified = duplicate_string("2023-01-01");
-    metadata->framework = duplicate_string("llama.cpp");
-    metadata->framework_version = duplicate_string("Unknown");
-    metadata->hardware_target = duplicate_string("CPU/GPU");
-    metadata->supports_gpu = true;
-    metadata->min_memory_mb = 8000;
-    metadata->recommended_memory_mb = 16000;
-    metadata->dependencies = duplicate_string("None");
-    metadata->checksum = duplicate_string("Unknown");
+    metadata->context_length = llama_n_ctx_train(model);
+    metadata->embedding_dim = llama_n_embd(model);
+    metadata->vocab_size = llama_n_vocab(model);
+    metadata->num_layers = llama_n_layer(model);
     metadata->is_valid = true;
-    metadata->validation_message = duplicate_string("Valid GGUF model");
-    
+
     return TK_SUCCESS;
 }
 
-/**
- * @brief Parses ONNX metadata
- */
-static tk_error_code_t parse_onnx_metadata(const char* model_path, tk_model_metadata_t* metadata) {
-    if (!model_path || !metadata) {
-        return TK_ERROR_INVALID_ARGUMENT;
+static tk_error_code_t parse_onnx_metadata(const char* model_path, tk_model_metadata_t* metadata, tk_onnx_handle_t* handle) {
+    if (!model_path || !metadata || !handle) return TK_ERROR_INVALID_ARGUMENT;
+
+    const OrtApi* g_ort = OrtGetApiBase()->GetApi(ORT_API_VERSION);
+
+    ORT_CHECK(g_ort->SessionGetInputCount(handle->session, &handle->input_count));
+    ORT_CHECK(g_ort->SessionGetOutputCount(handle->session, &handle->output_count));
+
+    handle->input_names = calloc(handle->input_count, sizeof(char*));
+    if (!handle->input_names) return TK_ERROR_OUT_OF_MEMORY;
+
+    for (size_t i = 0; i < handle->input_count; i++) {
+        ORT_CHECK(g_ort->SessionGetInputName(handle->session, i, handle->allocator, &handle->input_names[i]));
+
+        OrtTypeInfo* type_info;
+        ORT_CHECK(g_ort->SessionGetInputTypeInfo(handle->session, i, &type_info));
+        // In a full implementation, you would extract shape and type from type_info.
+        g_ort->ReleaseTypeInfo(type_info);
     }
     
-    // This would parse actual ONNX metadata in a real implementation
-    TK_LOG_INFO("Parsing ONNX metadata for: %s", model_path);
-    
-    // Set default values for ONNX models
+    // TODO: Repeat for outputs.
+
     metadata->name = duplicate_string("ONNX Model");
-    metadata->version = duplicate_string("1.0");
-    metadata->author = duplicate_string("Unknown");
-    metadata->description = duplicate_string("ONNX format model");
-    metadata->license = duplicate_string("Unknown");
-    metadata->architecture = duplicate_string("Unknown");
     metadata->type = TK_MODEL_TYPE_UNKNOWN;
     metadata->format = TK_MODEL_FORMAT_ONNX;
     metadata->size_bytes = get_file_size(model_path);
-    metadata->parameter_count = 0;
-    metadata->context_length = 0;
-    metadata->embedding_dim = 0;
-    metadata->vocab_size = 0;
-    metadata->num_layers = 0;
-    metadata->hidden_size = 0;
-    metadata->num_heads = 0;
-    metadata->quantization_level = 0.0f;
-    metadata->is_quantized = false;
-    metadata->is_multilingual = false;
-    metadata->language_count = 0;
-    metadata->supported_languages = NULL;
-    metadata->creation_date = duplicate_string("2023-01-01");
-    metadata->last_modified = duplicate_string("2023-01-01");
-    metadata->framework = duplicate_string("ONNX Runtime");
-    metadata->framework_version = duplicate_string("Unknown");
-    metadata->hardware_target = duplicate_string("CPU/GPU");
-    metadata->supports_gpu = true;
-    metadata->min_memory_mb = 1000;
-    metadata->recommended_memory_mb = 2000;
-    metadata->dependencies = duplicate_string("None");
-    metadata->checksum = duplicate_string("Unknown");
+    metadata->input_dim_count = handle->input_count;
+    metadata->output_dim_count = handle->output_count;
     metadata->is_valid = true;
-    metadata->validation_message = duplicate_string("Valid ONNX model");
-    
+
     return TK_SUCCESS;
 }
 

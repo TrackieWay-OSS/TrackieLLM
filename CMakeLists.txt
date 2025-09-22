@@ -203,6 +203,25 @@ endif()
 # find_package(Corrosion REQUIRED)
 
 #--------------------------------------------------------------------------------
+# Dependency Resolution (C/C++)
+#--------------------------------------------------------------------------------
+# Find ONNX Runtime. This assumes vcpkg is integrated with the toolchain.
+find_package(onnxruntime CONFIG REQUIRED)
+if(onnxruntime_FOUND)
+    message(STATUS "Found ONNX Runtime, linking against onnxruntime::onnxruntime")
+else()
+    message(FATAL_ERROR "ONNX Runtime not found, but is required.")
+endif()
+
+# Add the llama.cpp project as a subdirectory. This will define the 'llama'
+# and 'ggml_static' library targets that our C code will link against.
+# We turn off its tests and examples as we only need the library.
+option(LLAMA_BUILD_TESTS "Build llama.cpp tests" OFF)
+option(LLAMA_BUILD_EXAMPLES "Build llama.cpp examples" OFF)
+add_subdirectory(src/llama.cpp)
+
+
+#--------------------------------------------------------------------------------
 # Subdirectory Processing
 #--------------------------------------------------------------------------------
 # Add the main source directory. All targets will be defined in the CMakeLists.txt

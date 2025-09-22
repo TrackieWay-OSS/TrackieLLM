@@ -110,7 +110,7 @@ impl Path {
     }
 
     /// Provides access to the raw pointer for FFI calls.
-    fn as_ptr(&self) -> *const ffi::tk_path_t {
+    pub fn as_ptr(&self) -> *const ffi::tk_path_t {
         self.ptr
     }
 }

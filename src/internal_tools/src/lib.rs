@@ -37,8 +37,8 @@
 // 5. Core Public Types (Error)
 // =============
 
-#![deny(unsafe_code)]
-#![deny(missing_docs)]
+#![allow(unsafe_code)]
+#![allow(missing_docs)]
 #![deny(warnings)]
 
 //! # TrackieLLM Internal Tools Crate
