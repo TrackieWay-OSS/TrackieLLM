@@ -11,12 +11,9 @@
  * from loading and optimization to inference. It is suitable for non-LLM tasks
  * such as computer vision, audio processing, etc.
  *
- * Dependencies:
- *   - tract-onnx: For all ONNX model handling and inference.
- *   - crate::AiModelsError: For shared error handling.
- *   - log: For structured logging.
- *
- * SPDX-License-Identifier: AGPL-3.0 license
+ * ## Safety
+ * This module is written in 100% safe Rust and has no `unsafe` blocks. All
+ * interactions with low-level tensor operations are managed by the `tract` crate.
  */
 
 use crate::AiModelsError;
@@ -32,8 +29,6 @@ pub struct Tensor(pub tract_onnx::prelude::Tensor);
 /// Configuration for initializing an `OnnxRunner`.
 #[derive(Debug, Clone)]
 pub struct OnnxConfig {
-    /// The number of threads to use for intra-op parallelism. (Note: tract manages this automatically)
-    pub threads: u32,
     /// The execution provider to use. (Note: tract primarily uses CPU)
     pub execution_provider: ExecutionProvider,
 }
@@ -66,8 +61,6 @@ impl OnnxRunner {
         );
 
         // Tract's builder pattern to load, type-check, optimize, and make the model runnable.
-        // The `?` operator automatically converts tract errors into AiModelsError
-        // thanks to the `From` trait implementation we will add.
         let model = tract_onnx::onnx()
             .model_for_path(model_path)?
             .into_optimized()?
