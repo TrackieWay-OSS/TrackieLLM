@@ -1,3 +1,6 @@
 [submodule "src/llama.cpp"]
 	path = src/llama.cpp
 	url = https://github.com/ggml-org/llama.cpp
+[submodule "src/mistral-inference"]
+	path = src/mistral-inference
+	url = https://github.com/mistralai/mistral-inference.git
