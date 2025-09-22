@@ -3,119 +3,75 @@
  *
  * File: src/ai_models/onnx_runner.rs
  *
- * This file provides a safe Rust interface for running models in the ONNX
- * (Open Neural Network Exchange) format. These models are typically used for
- * non-LLM tasks such as computer vision, audio processing, and other
- * specialized neural network applications.
+ * This file provides a safe, pure-Rust interface for running models in the ONNX
+ * (Open Neural Network Exchange) format using the `tract-onnx` inference engine.
+ * This approach avoids FFI, enhancing safety and simplifying the toolchain.
  *
- * The `OnnxRunner` is designed to work in tandem with the C-based model loader.
- * It expects that an ONNX model has been loaded via `tk_model_loader_load_model`
- * and that a handle to the model context is provided. The runner then focuses
- * purely on the inference task: preparing input tensors, executing the model,
- * and interpreting the output tensors.
+ * The `OnnxRunner` is responsible for the entire lifecycle of an ONNX model,
+ * from loading and optimization to inference. It is suitable for non-LLM tasks
+ * such as computer vision, audio processing, etc.
  *
- * While the C API headers provided a detailed interface for an LLM runner, a
- * generic ONNX runner was not specified. Therefore, this module defines a
- * Rust-native API structure that would logically connect to a generic C-level
- * inference backend for ONNX models in the future.
- *
- * Dependencies:
- *   - crate::AiModelsError: For shared error handling.
- *   - log: For structured logging.
- *
- * SPDX-License-Identifier: AGPL-3.0 license
+ * ## Safety
+ * This module is written in 100% safe Rust and has no `unsafe` blocks. All
+ * interactions with low-level tensor operations are managed by the `tract` crate.
  */
 
 use crate::AiModelsError;
-use std::ffi::c_void;
+use std::path::Path;
+use tract_onnx::prelude::*;
+use tract_onnx::tract_core::downcast_rs::Downcast;
 
-// In a real implementation, this would likely be a more complex struct from a
-// dedicated tensor library, but for this raw implementation, a simple Vec is used.
-type Tensor = Vec<f32>;
+/// A new Tensor struct that wraps tract's Tensor.
+/// This abstracts the underlying tensor library from the user of OnnxRunner.
+#[derive(Clone, Debug)]
+pub struct Tensor(pub tract_onnx::prelude::Tensor);
 
 /// Configuration for initializing an `OnnxRunner`.
 #[derive(Debug, Clone)]
 pub struct OnnxConfig {
-    /// The number of threads to use for intra-op parallelism.
-    pub threads: u32,
-    /// The execution provider to use (e.g., "CPU", "CUDA", "CoreML").
+    /// The execution provider to use. (Note: tract primarily uses CPU)
     pub execution_provider: ExecutionProvider,
 }
 
 /// Defines the available execution providers for ONNX models.
+/// Note: `tract` is mainly a CPU engine, so these are conceptual for API compatibility.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecutionProvider {
     /// Use the CPU for inference.
     Cpu,
-    /// Use NVIDIA's CUDA for GPU-accelerated inference.
-    Cuda {
-        /// The ID of the GPU device to use.
-        device_id: u32,
-    },
-    /// Use Apple's CoreML for acceleration on macOS/iOS.
-    CoreMl,
-    // Other providers like TensorRT, OpenVINO, etc., could be added here.
 }
 
-/// A safe, high-level runner for ONNX-based models.
-///
-/// This struct encapsulates the logic for running inference on models loaded
-/// in the ONNX format.
+/// A safe, high-level runner for ONNX-based models, using the `tract` engine.
+#[derive(Debug)]
 pub struct OnnxRunner {
-    /// The configuration for this runner instance.
-    config: OnnxConfig,
-    /// An opaque handle to the underlying model context loaded by the C API.
-    /// This handle is "borrowed" and its lifetime is managed externally,
-    /// for example, by a higher-level `AiModelService`.
-    model_handle: *mut c_void,
+    model: SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>,
 }
 
 impl OnnxRunner {
-    /// Creates a new `OnnxRunner` for a given loaded model.
-    ///
-    /// This function does not load the model itself; it assumes the model
-    /// has already been loaded via the `tk_model_loader` and that the caller
-    /// is providing a valid handle.
+    /// Creates a new `OnnxRunner` by loading and optimizing an ONNX model from a file.
     ///
     /// # Arguments
     ///
-    /// * `config` - The configuration for the ONNX session.
-    /// * `model_handle` - An opaque pointer to the loaded model context.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `model_handle` is a valid, non-null pointer
-    /// to a model context that will remain valid for the lifetime of the
-    /// `OnnxRunner`.
-    pub unsafe fn new(config: OnnxConfig, model_handle: *mut c_void) -> Result<Self, AiModelsError> {
-        if model_handle.is_null() {
-            return Err(AiModelsError::ModelLoadFailed {
-                path: "Unknown".to_string(),
-                reason: "A null model handle was provided to the runner.".to_string(),
-            });
-        }
-
+    /// * `_config` - Configuration for the runner (currently unused by tract's simple API).
+    /// * `model_path` - The file path to the ONNX model.
+    pub fn new(_config: OnnxConfig, model_path: &Path) -> Result<Self, AiModelsError> {
         log::info!(
-            "Initializing ONNX runner with provider: {:?}",
-            config.execution_provider
+            "Initializing ONNX runner for model path: {:?}",
+            model_path
         );
 
-        // In a real implementation, this would involve creating an ONNX
-        // session, setting providers, and associating it with the model handle.
-        // e.g., `ort_create_session(model_handle, config, &mut session_handle)`
+        // Tract's builder pattern to load, type-check, optimize, and make the model runnable.
+        let model = tract_onnx::onnx()
+            .model_for_path(model_path)?
+            .into_optimized()?
+            .into_runnable()?;
 
-        Ok(Self {
-            config,
-            model_handle,
-        })
+        Ok(Self { model })
     }
 
     /// Runs inference on the loaded ONNX model.
     ///
-    /// This function takes a list of input tensors, passes them to the model,
-    /// executes the inference, and returns a list of output tensors.
-    ///
-    //_ # Arguments
+    /// # Arguments
     ///
     /// * `inputs` - A slice of input tensors. The number and shape of these
     ///   tensors must match the model's expected inputs.
@@ -126,36 +82,34 @@ impl OnnxRunner {
     pub fn run(&self, inputs: &[Tensor]) -> Result<Vec<Tensor>, AiModelsError> {
         log::debug!("Running ONNX inference with {} input tensor(s).", inputs.len());
 
-        // --- Mock Implementation ---
-        // A real implementation would:
-        // 1. Convert the Rust `Tensor` structs into the C API's tensor format.
-        // 2. Make an FFI call to a C function like `tk_onnx_run_inference`.
-        //    e.g., `tk_onnx_run_inference(self.model_handle, c_inputs, &mut c_outputs)`
-        // 3. Convert the resulting C output tensors back into safe Rust `Tensor` structs.
-        // 4. Free the C tensor objects.
-
         if inputs.is_empty() {
             return Err(AiModelsError::InferenceFailed(
                 "At least one input tensor is required.".to_string(),
             ));
         }
 
-        // Simulate inference time.
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        // Convert our `Tensor` wrappers into the `TValue` (`Arc<dyn Datum>`) that tract expects.
+        let tract_inputs: TVec<TValue> =
+            inputs.iter().map(|t| t.0.clone().into()).collect();
 
-        // Simulate a plausible output based on the input.
-        // For example, an object detection model might take one image tensor
-        // and return two tensors: one for bounding boxes and one for scores.
-        let mock_output_boxes = vec![0.1, 0.2, 0.8, 0.9, 0.95]; // x1, y1, x2, y2, confidence
-        let mock_output_labels = vec![1.0]; // class_id
+        let result_tensors = self.model.run(tract_inputs)?;
 
-        log::info!("ONNX inference complete. Produced 2 output tensor(s).");
+        // Downcast the resulting `TValue`s back to concrete `tract_onnx::prelude::Tensor`s
+        // and wrap them in our public `Tensor` type.
+        let outputs: Result<Vec<Tensor>, _> = result_tensors
+            .into_iter()
+            .map(|t| {
+                t.as_any()
+                    .downcast_ref::<tract_onnx::prelude::Tensor>()
+                    .ok_or_else(|| {
+                        AiModelsError::InferenceFailed(
+                            "Failed to downcast output tensor to concrete type".to_string(),
+                        )
+                    })
+                    .map(|tensor| Tensor(tensor.clone()))
+            })
+            .collect();
 
-        Ok(vec![mock_output_boxes, mock_output_labels])
+        outputs
     }
 }
-
-// Note: The `Drop` trait is not implemented for `OnnxRunner` because it does
-// not own the `model_handle`. The responsibility for unloading the model via
-// `tk_model_loader_unload_model` lies with the owner of the handle, ensuring
-// a clear ownership model.

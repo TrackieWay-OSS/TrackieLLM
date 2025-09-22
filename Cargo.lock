@@ -44,9 +44,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "candid",
+ "futures",
+ "internal_tools",
  "log",
  "serde",
+ "serde_json",
  "thiserror 1.0.69",
+ "tokio",
  "tract-onnx",
  "utoipa",
 ]
@@ -1664,6 +1668,14 @@ name = "regex-syntax"
 version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "caf4aa5b0f434c91fe5c7f1ecb6a5ece2130b02ad2a590589dda5146df959001"
+
+[[package]]
+name = "rust_tests"
+version = "0.1.0"
+dependencies = [
+ "ai_models",
+ "internal_tools",
+]
 
 [[package]]
 name = "rustc-demangle"

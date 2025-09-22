@@ -1,0 +1,11 @@
+[package]
+name = "model_service"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ai_models = { path = "../ai_models" }
+anyhow = "1.0"
+log = "0.4"
+tokio = { version = "1", features = ["sync"] }
+internal_tools = { path = "../internal_tools" }

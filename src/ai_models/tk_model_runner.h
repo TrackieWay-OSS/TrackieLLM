@@ -43,9 +43,7 @@ typedef struct tk_llm_result_s tk_llm_result_t;
  * @brief Configuration for initializing the LLM Runner.
  */
 typedef struct {
-    tk_path_t* model_path;          /**< Path to the GGUF model file. */
-    uint32_t   context_size;        /**< The context window size for the model (e.g., 4096). */
-    uint32_t   gpu_layers_offload;  /**< Number of model layers to offload to the GPU. 0 for CPU only. */
+    uint32_t   context_size;        /**< The context window size for the model (e.g., 4096). This may be used to verify against the loaded model's context. */
     const char* system_prompt;      /**< The initial, high-level instruction defining the AI's persona and goal. */
     uint32_t   random_seed;         /**< Seed for the random number generator for reproducible outputs. */
 } tk_llm_config_t;
@@ -113,6 +111,9 @@ struct tk_llm_result_s {
 extern "C" {
 #endif
 
+// Forward-declare llama.cpp types to avoid including the full header here.
+struct llama_model;
+
 //------------------------------------------------------------------------------
 // Runner Lifecycle Management
 //------------------------------------------------------------------------------
@@ -120,18 +121,22 @@ extern "C" {
 /**
  * @brief Creates and initializes a new LLM Runner instance.
  *
- * Loads the specified GGUF model, initializes the llama.cpp backend, allocates
- * the context, and prepares the runner for conversational inference.
+ * This function creates a new `llama_context` from a pre-loaded `llama_model`
+ * provided by the model loader.
  *
  * @param[out] out_runner Pointer to receive the address of the new runner instance.
- * @param[in] config The configuration for the runner.
+ * @param[in] model A pointer to a `llama_model` loaded by `tk_model_loader`.
+ * @param[in] config The configuration for the runner's context.
  *
  * @return TK_SUCCESS on success.
  * @return TK_ERROR_INVALID_ARGUMENT if pointers are NULL or config is invalid.
  * @return TK_ERROR_OUT_OF_MEMORY on memory allocation failure.
- * @return TK_ERROR_MODEL_LOAD_FAILED if the GGUF model cannot be loaded.
  */
-TK_NODISCARD tk_error_code_t tk_llm_runner_create(tk_llm_runner_t** out_runner, const tk_llm_config_t* config);
+TK_NODISCARD tk_error_code_t tk_llm_runner_create(
+    tk_llm_runner_t** out_runner,
+    struct llama_model* model,
+    const tk_llm_config_t* config
+);
 
 /**
  * @brief Destroys an LLM Runner instance and frees all associated resources.
@@ -141,44 +146,39 @@ TK_NODISCARD tk_error_code_t tk_llm_runner_create(tk_llm_runner_t** out_runner, 
 void tk_llm_runner_destroy(tk_llm_runner_t** runner);
 
 //------------------------------------------------------------------------------
-// Conversational Inference
+// Conversational Inference (Streaming API)
 //------------------------------------------------------------------------------
 
 /**
- * @brief Generates a structured response based on the current context and available tools.
+ * @brief Prepares the runner for a new generation by processing the initial prompt.
  *
- * This is the core function of the runner. It performs the following steps:
- * 1. Constructs a complex prompt from the system prompt, conversation history,
- *    available tools, and the new multimodal context.
- * 2. Runs inference using the llama.cpp backend.
- * 3. Parses the raw text output from the LLM.
- * 4. Determines if the output is a direct response or a tool call request.
- * 5. Populates and returns a structured `tk_llm_result_t` object.
+ * This function tokenizes and evaluates the entire prompt, filling the KV cache.
+ * After this call, the runner is ready for token-by-token generation.
  *
  * @param[in] runner The LLM runner instance.
- * @param[in] prompt_context The new multimodal context for this turn.
- * @param[in] available_tools An array of tool definitions.
- * @param[in] tool_count The number of tools in the `available_tools` array.
- * @param[out] out_result Pointer to receive the newly allocated result object.
- *                        The caller assumes ownership and must free it with
- *                        `tk_llm_result_destroy`.
+ * @param[in] prompt The full prompt to be evaluated.
+ * @param[in] use_tool_grammar If true, applies the built-in tool-use grammar.
  *
- * @return TK_SUCCESS on successful generation.
- * @return TK_ERROR_INVALID_ARGUMENT if required pointers are NULL.
- * @return TK_ERROR_INFERENCE_FAILED if the backend fails during generation.
- * @return TK_ERROR_OUT_OF_MEMORY if result allocation fails.
- *
- * @par Thread-Safety
- * This function is NOT thread-safe. Only one thread should interact with a
- * given runner instance at a time.
+ * @return TK_SUCCESS on success.
  */
-TK_NODISCARD tk_error_code_t tk_llm_runner_generate_response(
+TK_NODISCARD tk_error_code_t tk_llm_runner_prepare_generation(
     tk_llm_runner_t* runner,
-    const tk_llm_prompt_context_t* prompt_context,
-    const tk_llm_tool_definition_t* available_tools,
-    size_t tool_count,
-    tk_llm_result_t** out_result
+    const char* prompt,
+    bool use_tool_grammar
 );
+
+/**
+ * @brief Generates the next token in the sequence.
+ *
+ * This function should be called in a loop after `tk_llm_runner_prepare_generation`.
+ * It samples one token, decodes it, and returns a pointer to its string
+ * representation. The pointer is valid only until the next call to this function.
+ *
+ * @param[in] runner The LLM runner instance.
+ * @return A pointer to the string representation of the next token.
+ * @return `NULL` if the end-of-sequence token is generated or an error occurs.
+ */
+TK_NODISCARD const char* tk_llm_runner_generate_next_token(tk_llm_runner_t* runner);
 
 /**
  * @brief Adds the result of a tool call back into the conversation history.
