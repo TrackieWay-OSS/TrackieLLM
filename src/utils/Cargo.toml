@@ -1,46 +1,40 @@
-# phkaiser13/trackiellm/TrackieLLM-main/src/utils/Cargo.toml
+#
+# Copyright (C) 2025 TrackieWay-OSS
+#
+# This file is part of TrackieLLM.
+#
+# TrackieLLM is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# TrackieLLM is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with TrackieLLM. If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
 
 [package]
-# --- Package Metadata ---
-# The name of the crate. This is used by cargo and crates.io.
-name = "trackie-utils"
-
-# The version of the crate. Follows semantic versioning.
+name = "trackiellm-utils"
 version = "0.1.0"
-
-# The Rust edition to use for compiling this crate.
 edition = "2021"
-
-# The authors of the crate.
-authors = ["Pedro Henrique / phdev13"]
-
-# The license for the crate, as requested.
-license = "Apache-2.0"
-
-# A short description of the crate's purpose.
+license = "AGPL-3.0"
+authors = ["TrackieWay-OSS <support-trackway@vy-ai.com>"]
 description = "Provides safe Rust wrappers for core C-based utilities for error handling and logging in the TrackieLLM project."
+repository = "https://github.com/TrackieWay-OSS/TrackieLLM"
+homepage = "https://vy-ai.com"
 
-# The source code repository.
-repository = "https://github.com/phkaiser13/trackiellm"
-
+[lib]
+name = "trackiellm_utils"
+path = "src/lib.rs"
 
 [dependencies]
-# --- Crate Dependencies ---
-# 'thiserror' is used for ergonomic, derive-based error handling.
 thiserror = "1.0"
 
 [build-dependencies]
-# --- Build-time Dependencies ---
-# 'bindgen' automatically generates Rust FFI bindings to C libraries.
-# We use it to create safe wrappers around our C error codes.
 bindgen = "0.69"
-
-[lib]
-# --- Library Target Configuration ---
-# Specifies that this package is a library.
-
-# The name of the library. When other crates link against this one, they will use this name.
-name = "trackie_utils"
-
-# The path to the main library file.
-path = "src/lib.rs"

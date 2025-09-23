@@ -1,40 +1,39 @@
-# Copyright [2023] [TrackieLLM Contributors]
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# Copyright (C) 2025 TrackieWay-OSS
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# This file is part of TrackieLLM.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# TrackieLLM is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# TrackieLLM is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with TrackieLLM. If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
 
 [package]
-name = "interaction"
+name = "trackiellm-interaction"
 version = "0.1.0"
 edition = "2021"
-authors = ["TrackieLLM Contributors"]
-license = "Apache-2.0"
+license = "AGPL-3.0"
+authors = ["TrackieWay-OSS <support-trackway@vy-ai.com>"]
 description = "A crate for handling user interaction, including command parsing and feedback management."
-repository = "https://github.com/phkaiser13/trackiellm"
+repository = "https://github.com/TrackieWay-OSS/TrackieLLM"
+homepage = "https://vy-ai.com"
 readme = "README.md"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "trackiellm_interaction"
+crate-type = ["rlib"]
 
 [dependencies]
-# Dependency for parsing command strings.
-# The `command_parser.rs` module relies on `nom` for its core functionality.
-nom = "8.0.0"
-
-# Standard logging facade.
-# Useful for integrating with the broader logging infrastructure of the project.
 log = "0.4"
-
-
-# Defines the library target for this crate.
-[lib]
-name = "interaction"
-crate-type = ["rlib"]
+nom = "8.0.0"

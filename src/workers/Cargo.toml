@@ -1,46 +1,42 @@
-# Copyright (C) 2025 Pedro Henrique / phdev13
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# Copyright (C) 2025 TrackieWay-OSS
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# This file is part of TrackieLLM.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# TrackieLLM is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# TrackieLLM is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with TrackieLLM. If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+
+[package]
+name = "trackiellm-workers"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0"
+authors = ["TrackieWay-OSS <support-trackway@vy-ai.com>"]
+description = "Manages the long-running, asynchronous background tasks (workers) for TrackieLLM."
+repository = "https://github.com/TrackieWay-OSS/TrackieLLM"
+homepage = "https://vy-ai.com"
+readme = "README.md"
 
 [lib]
 name = "trackiellm_workers"
 path = "src/lib.rs"
 
-[package]
-name = "trackiellm_workers"
-version = "0.1.0"
-edition = "2021"
-license = "Apache-2.0"
-authors = ["Pedro Henrique / phdev13"]
-description = "Manages the long-running, asynchronous background tasks (workers) for TrackieLLM."
-repository = "https://github.com/phkaiser13/trackiellm"
-readme = "README.md"
-
 [dependencies]
-# Tokio is the runtime for writing asynchronous applications with Rust.
-# It is essential for managing the concurrent workers.
-# - "sync" is needed for channels (mpsc, watch) used for communication.
-# - "time" is needed for functions like sleep() and Instant.
 tokio = { version = "1.36.0", features = ["sync", "time"] }
-
-# Internal crate that provides the central event bus for inter-worker communication.
-trackiellm_event_bus = { path = "../event_bus" }
-
-# Internal crate defining the FFI bridge to the C-based audio processing library.
-trackiellm_audio = { path = "../audio", package = "trackie-audio" }
-
-# Internal crate defining the FFI bridge to the C-based vision processing library.
-trackiellm_vision = { path = "../vision", package = "vision" }
-
-# Internal crate that provides the memory and reasoning components for the cortex worker.
-trackiellm_cortex = { path = "../cortex" }
+trackiellm-audio = { path = "../audio" }
+trackiellm-cortex = { path = "../cortex" }
+trackiellm-event-bus = { path = "../event_bus" }
+trackiellm-vision = { path = "../vision" }
