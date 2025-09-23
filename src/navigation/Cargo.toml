@@ -1,56 +1,38 @@
-# Copyright (C) 2025 Pedro Henrique / phdev13
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# Copyright (C) 2025 TrackieWay-OSS
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# This file is part of TrackieLLM.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# TrackieLLM is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# TrackieLLM is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with TrackieLLM. If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
 
 [package]
-# The name of the crate.
-name = "navigation"
-
-# The version of the crate.
+name = "trackiellm-navigation"
 version = "0.1.0"
-
-# The Rust edition to use.
 edition = "2021"
-
-# The authors of the crate.
-authors = ["Pedro Henrique / phdev13"]
-
-# The license for the crate.
-license = "Apache-2.0"
-
-# A short description of the crate's functionality.
+license = "AGPL-3.0"
+authors = ["TrackieWay-OSS <support-trackway@vy-ai.com>"]
 description = "Provides spatial analysis, free space detection, and obstacle tracking for robotics applications."
-
-# URL of the repository.
-# repository = "https://github.com/phkaiser13/trackiellm"
-
-# Keywords for discoverability on crates.io.
+repository = "https://github.com/TrackieWay-OSS/TrackieLLM"
+homepage = "https://vy-ai.com"
 keywords = ["robotics", "navigation", "ffi", "computer-vision", "slam"]
-
-# Categories for classification on crates.io.
 categories = ["science::robotics", "external-ffi-bindings"]
 
-
 [lib]
-# This crate is designed to be a C-compatible dynamic library for FFI,
-# but we also include 'rlib' to allow it to be used by other Rust crates
-# within the same workspace if needed.
+name = "trackiellm_navigation"
 crate-type = ["cdylib", "rlib"]
 
-
 [dependencies]
-# This crate currently has no external dependencies. All required functionality
-# is provided by the Rust standard library.
-#
-# Example of how to add a dependency:
-# log = "0.4.14"

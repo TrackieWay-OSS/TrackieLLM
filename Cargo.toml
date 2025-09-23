@@ -1,15 +1,14 @@
 #
-# Copyright (C) 2025 Pedro Henrique / phdev13
-#
-# File: Cargo.toml
+# Copyright (C) 2025 TrackieWay-OSS
 #
 # This file defines the root of the Rust workspace for TrackieLLM.
+#
 # As a "virtual manifest", it doesn't correspond to a specific package itself
 # but instead orchestrates the collection of member crates located throughout
 # the `src` directory. This allows for unified dependency management, build
 # profiles, and tooling across all Rust components of the project.
 #
-# SPDX-License-Identifier: AGPL-3.0 license
+# SPDX-License-Identifier: AGPL-3.0
 #
 
 [workspace]
@@ -30,8 +29,10 @@ members = [
     "src/experiments",
     "src/ffi",
     "src/interaction",
+    "src/integration",
     "src/internal_tools",
     "src/logging_ext",
+    "src/model_service",
     "src/monitoring",
     "src/navigation",
     "src/networking",

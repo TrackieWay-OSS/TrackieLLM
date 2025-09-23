@@ -1,11 +1,41 @@
+#
+# Copyright (C) 2025 TrackieWay-OSS
+#
+# This file is part of TrackieLLM.
+#
+# TrackieLLM is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# TrackieLLM is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with TrackieLLM. If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+
 [package]
-name = "model_service"
+name = "trackiellm-model-service"
 version = "0.1.0"
 edition = "2021"
+license = "AGPL-3.0"
+authors = ["TrackieWay-OSS <support-trackway@vy-ai.com>"]
+description = "A service for managing and serving AI models."
+repository = "https://github.com/TrackieWay-OSS/TrackieLLM"
+homepage = "https://vy-ai.com"
+
+[lib]
+name = "trackiellm_model_service"
+path = "src/lib.rs"
 
 [dependencies]
-ai_models = { path = "../ai_models" }
 anyhow = "1.0"
 log = "0.4"
 tokio = { version = "1", features = ["sync"] }
-internal_tools = { path = "../internal_tools" }
+trackiellm-ai-models = { path = "../ai_models" }
+trackiellm-internal-tools = { path = "../internal_tools" }

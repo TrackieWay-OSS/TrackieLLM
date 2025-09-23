@@ -1,25 +1,39 @@
-# Cargo.toml for the internal_tools crate
+#
+# Copyright (C) 2025 TrackieWay-OSS
+#
+# This file is part of TrackieLLM.
+#
+# TrackieLLM is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# TrackieLLM is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with TrackieLLM. If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
 
 [package]
-name = "internal_tools"
+name = "trackiellm-internal-tools"
 version = "0.1.0"
-authors = ["Pedro Henrique / phdev13"]
 edition = "2021"
-license = "Apache-2.0"
+license = "AGPL-3.0"
+authors = ["TrackieWay-OSS <support-trackway@vy-ai.com>"]
 description = "Safe Rust wrappers for internal C-based utilities like configuration parsing and filesystem management."
-repository = "https://github.com/phkaiser13/trackiellm" # Optional: Add a repository link
-readme = "README.md" # Optional: Assumes you might add a README later
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-# For structured logging, mentioned in the source file comments.
-log = "0.4"
-
-# For ergonomic error handling, used extensively in the error types.
-thiserror = "2.0.16"
+repository = "https://github.com/TrackieWay-OSS/TrackieLLM"
+homepage = "https://vy-ai.com"
+readme = "README.md"
 
 [lib]
-# Defines this crate as a library.
-name = "internal_tools"
+name = "trackiellm_internal_tools"
 path = "src/lib.rs"
+
+[dependencies]
+log = "0.4"
+thiserror = "2.0.16"

@@ -1,35 +1,36 @@
-# Copyright (C) 2025 Pedro Henrique / phdev13
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# Copyright (C) 2025 TrackieWay-OSS
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# This file is part of TrackieLLM.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# TrackieLLM is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# TrackieLLM is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with TrackieLLM. If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
 
 [package]
-name = "trackiellm_event_bus"
+name = "trackiellm-event-bus"
 version = "0.1.0"
 edition = "2021"
-license = "Apache-2.0"
-authors = ["Pedro Henrique / phdev13"]
+license = "AGPL-3.0"
+authors = ["TrackieWay-OSS <support-trackway@vy-ai.com>"]
 description = "Provides a system-wide, many-to-many, asynchronous communication channel for TrackieLLM."
-repository = "https://github.com/phkaiser13/trackiellm"
-readme = "README.md" 
+repository = "https://github.com/TrackieWay-OSS/TrackieLLM"
+homepage = "https://vy-ai.com"
+readme = "README.md"
+
 [dependencies]
-# Tokio provides the core for our asynchronous, thread-safe broadcast channel,
-# which is the foundation of the event bus. The "sync" feature is required for broadcast channels.
 tokio = { version = "1.36.0", features = ["sync"] }
-
-# Internal crate dependency that defines shared data structures for sensor fusion results,
-# like `WorldState`. The path assumes that 'sensors' is a sibling directory to 'event_bus'.
-trackiellm_sensors = { path = "../sensors", package = "sensors" }
-
-# Internal crate dependency that defines shared data structures for navigation analysis,
-# like `SpaceSector` and `TrackedObstacle`. The path assumes 'navigation' is a sibling directory.
-trackiellm_navigation = { path = "../navigation", package = "navigation" }
+trackiellm-navigation = { path = "../navigation" }
+trackiellm-sensors = { path = "../sensors" }

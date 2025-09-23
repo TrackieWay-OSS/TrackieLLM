@@ -1,29 +1,40 @@
+#
+# Copyright (C) 2025 TrackieWay-OSS
+#
+# This file is part of TrackieLLM.
+#
+# TrackieLLM is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# TrackieLLM is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with TrackieLLM. If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+
 [package]
-# The name of the package.
-name = "sensors"
-
-# The version of the package.
+name = "trackiellm-sensors"
 version = "0.1.0"
-
-# The Rust edition to use.
 edition = "2021"
-
-# The license for the package.
-license = "Apache-2.0"
-
-# A brief description of the package.
+license = "AGPL-3.0"
+authors = ["TrackieWay-OSS <support-trackway@vy-ai.com>"]
 description = "A library for sensor data processing, filtering, and fusion, with a C-compatible FFI layer."
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+repository = "https://github.com/TrackieWay-OSS/TrackieLLM"
+homepage = "https://vy-ai.com"
 
 [lib]
-# This configures the library crate compilation.
-# "lib" is the standard Rust library format.
-# "staticlib" compiles the code into a static library (.a) that can be linked into other applications.
+name = "trackiellm_sensors"
 crate-type = ["lib", "staticlib"]
 
 [dependencies]
-log = "0.4.21"
-thiserror = "1.0.58"
-nalgebra = "0.32.3"
 fusion-ahrs = "0.2.0"
+log = "0.4.21"
+nalgebra = "0.32.3"
+thiserror = "1.0.58"

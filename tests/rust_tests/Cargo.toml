@@ -1,8 +1,8 @@
 [package]
-name = "rust_tests"
+name = "trackiellm-rust-tests"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ai_models = { path = "../../src/ai_models" }
-internal_tools = { path = "../../src/internal_tools" }
+trackiellm-ai-models = { path = "../../src/ai_models" }
+trackiellm-internal-tools = { path = "../../src/internal_tools" }

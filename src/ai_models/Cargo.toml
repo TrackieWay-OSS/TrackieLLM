@@ -1,57 +1,51 @@
-# Cargo.toml for the ai_models crate
-# This file defines the metadata and dependencies for the AI model runner module.
+#
+# Copyright (C) 2025 TrackieWay-OSS
+#
+# This file is part of TrackieLLM.
+#
+# TrackieLLM is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# TrackieLLM is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with TrackieLLM. If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
 
 [package]
-name = "ai_models"
+name = "trackiellm-ai-models"
 version = "0.1.0"
 edition = "2021"
-license = "Apache-2.0"
-authors = ["TrackieLLM Contributors"]
+license = "AGPL-3.0"
+authors = ["TrackieWay-OSS <support-trackway@vy-ai.com>"]
 description = "A library for running various AI models, providing a unified interface for formats like GGUF and ONNX."
-repository = "https://github.com/phkaiser13/trackiellm"
-readme = "README.md" # You might want to create a README.md for this crate
+repository = "https://github.com/TrackieWay-OSS/TrackieLLM"
+homepage = "https://vy-ai.com"
+readme = "README.md"
 keywords = ["ai", "ml", "inference", "onnx", "gguf"]
 categories = ["science", "computer-vision", "multimedia::audio"]
 build = "build.rs"
 
-# The lib section specifies that this package is a library.
 [lib]
-name = "ai_models"
+name = "trackiellm_ai_models"
 path = "src/lib.rs"
 
-# Dependencies required for this crate.
 [dependencies]
-# For easy and robust error handling.
 anyhow = "1.0"
-
-# Unified logging facade.
-log = "0.4"
-
-# Serde is a framework for serializing and deserializing Rust data structures efficiently.
-# The "derive" feature enables procedural macros for automatic implementation of Serialize and Deserialize.
-serde = { version = "1.0", features = ["derive"] }
-
-# For robust error handling, often used with anyhow.
-thiserror = "1.0"
-
-# For serializing and deserializing the tool call arguments.
-serde_json = "1.0"
-
-# For async operations, specifically spawn_blocking for FFI calls.
-tokio = { version = "1", features = ["sync", "rt"] }
-futures = "0.3"
-
-# Candid is a data description language for communicating with services running on specific platforms.
-# Used here for data serialization/deserialization.
 candid = "0.10.1"
-
-# Library to generate OpenAPI documentation from Rust code.
-# The "serde_yaml" feature is included for YAML support with Serde.
-utoipa = { version = "4.2.0", features = ["serde_yaml"] }
-
-# ONNX (Open Neural Network Exchange) inference runtime.
-# This is the core dependency for running ONNX models.
+futures = "0.3"
+log = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+tokio = { version = "1", features = ["sync", "rt"] }
 tract-onnx = "0.21.0"
-
-[dependencies.internal_tools]
-path = "../internal_tools"
+trackiellm-internal-tools = { path = "../internal_tools" }
+utoipa = { version = "4.2.0", features = ["serde_yaml"] }
