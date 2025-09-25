@@ -91,17 +91,34 @@ pub fn find_plane_ransac(
         }
     }
 
-    // Optional: Refit the plane using all inliers from the best model found
-    // This can provide a more accurate final plane model.
     if let Some(plane) = best_plane {
         let all_inliers: Vec<&Point3<f32>> = points
             .iter()
             .filter(|p| plane.distance_to_point(p) < distance_threshold)
+            .cloned()
             .collect();
 
-        if all_inliers.len() > max_inliers {
-            // Refit logic would go here (e.g., using PCA or least squares on the inliers)
-            // For now, we return the plane from the best sample.
+        if all_inliers.len() > 3 {
+            // --- Refit the plane using all inliers for better accuracy ---
+            // Calculate the centroid of the inliers
+            let centroid: Point3<f32> = all_inliers.iter().fold(Point3::origin(), |sum, p| sum + p.coords) / (all_inliers.len() as f32);
+
+            // Build the covariance matrix
+            let covariance_matrix = all_inliers.iter().fold(nalgebra::Matrix3::zeros(), |cov, p| {
+                let centered = p - centroid;
+                cov + centered * centered.transpose()
+            });
+
+            // Perform PCA (eigen decomposition) to find the normal of the plane
+            let eigen = nalgebra::linalg::SymmetricEigen::new(covariance_matrix);
+            let mut normal = eigen.eigenvectors.column(0).into_owned(); // The eigenvector with the smallest eigenvalue
+
+            if normal.y < 0.0 {
+                normal = -normal;
+            }
+
+            let d = normal.dot(&centroid.coords);
+            return Some(Plane { normal, d });
         }
     }
 

@@ -258,14 +258,16 @@ TK_NODISCARD tk_error_code_t tk_vision_pipeline_process_frame(
 
             // --- Build Scene Graph ---
             // This is done only if fusion was successful and it was requested.
-            if (analysis_flags & TK_VISION_ANALYZE_SCENE_GRAPH) {
+            if ((analysis_flags & TK_VISION_ANALYZE_SCENE_GRAPH) && nav_cues) {
                 // The C `tk_vision_object_t` is not directly compatible with Rust's `EnrichedObject`.
                 // A temporary conversion is needed. For now, we assume they are compatible
                 // as a simplification, but this would need a proper conversion function.
-                // NOTE: This is a temporary cast for demonstration. A real implementation
-                // would need to copy the data into a new `EnrichedObject` array.
                 result->serialized_scene_graph = tk_vision_rust_build_scene_graph(
-                    (const EnrichedObject*)result->objects, result->object_count
+                    (const EnrichedObject*)result->objects,
+                    result->object_count,
+                    &nav_cues->point_cloud,
+                    result->depth_map->width,
+                    result->depth_map->height
                 );
                 if (result->serialized_scene_graph) {
                     tk_log_debug("Scene graph built successfully.");
@@ -460,15 +462,28 @@ static tk_error_code_t perform_object_detection(tk_vision_pipeline_t* pipeline, 
 
             // --- Classify Attributes ---
             char* color_name = NULL;
+            char* door_state = NULL;
+            char temp_attributes[128] = {0};
+
             if (tk_classify_dominant_color(frame, &detections[i].bbox, &color_name) == TK_SUCCESS) {
-                // For now, we only have one attribute. A more robust solution
-                // would build a proper key-value string.
-                size_t len = strlen("color:") + strlen(color_name) + 1;
-                result->objects[i].attributes = (char*)malloc(len);
-                if (result->objects[i].attributes) {
-                    snprintf(result->objects[i].attributes, len, "color:%s", color_name);
-                }
+                strncat(temp_attributes, "color:", sizeof(temp_attributes) - strlen(temp_attributes) - 1);
+                strncat(temp_attributes, color_name, sizeof(temp_attributes) - strlen(temp_attributes) - 1);
                 free(color_name);
+            }
+
+            if (strstr(detections[i].label, "door") != NULL) {
+                if (tk_classify_door_state(frame, &detections[i].bbox, &door_state) == TK_SUCCESS) {
+                    if (strlen(temp_attributes) > 0) {
+                        strncat(temp_attributes, ",", sizeof(temp_attributes) - strlen(temp_attributes) - 1);
+                    }
+                    strncat(temp_attributes, "state:", sizeof(temp_attributes) - strlen(temp_attributes) - 1);
+                    strncat(temp_attributes, door_state, sizeof(temp_attributes) - strlen(temp_attributes) - 1);
+                    free(door_state);
+                }
+            }
+
+            if (strlen(temp_attributes) > 0) {
+                result->objects[i].attributes = strdup(temp_attributes);
             }
         }
         result->object_count = detection_count;
@@ -612,8 +627,19 @@ typedef struct {
 extern CNavigationCues* tk_vision_rust_analyze_navigation(const tk_vision_depth_map_t* depth_map_ptr);
 extern void tk_vision_rust_free_navigation_cues(CNavigationCues* cues_ptr);
 
+// C-compatible mirror of nalgebra::Point3<f32>
+typedef struct {
+    float x, y, z;
+} CPoint3D;
+
+// C-compatible mirror of the CPointCloud struct in Rust
+typedef struct {
+    const CPoint3D* points;
+    size_t count;
+} CPointCloud;
+
 // --- FFI Declarations for Rust Scene Graph Library ---
-extern char* tk_vision_rust_build_scene_graph(const EnrichedObject* enriched_objects_ptr, size_t object_count);
+extern char* tk_vision_rust_build_scene_graph(const EnrichedObject* enriched_objects_ptr, size_t object_count, const CPointCloud* point_cloud, uint32_t depth_map_width, uint32_t depth_map_height);
 extern void tk_vision_rust_free_string(char* s);
 
 

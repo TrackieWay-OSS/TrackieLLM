@@ -52,29 +52,50 @@ pub struct SceneGraph {
     pub edges: Vec<Edge>,
 }
 
+use super::point_cloud::Point3D;
+
 /// Builds a semantic scene graph from a list of enriched objects.
 ///
 /// # Arguments
 /// * `objects` - A slice of `EnrichedObject`s that have been fused with depth data.
+/// * `point_cloud` - The full 3D point cloud of the scene.
+/// * `depth_map_width`, `depth_map_height` - Dimensions of the depth map for coordinate mapping.
 ///
 /// # Returns
 /// A `SceneGraph` representing the spatial relationships between the objects.
-pub fn build_scene_graph(objects: &[EnrichedObject]) -> SceneGraph {
+pub fn build_scene_graph(
+    objects: &[EnrichedObject],
+    point_cloud: &[Point3D],
+    depth_map_width: u32,
+    depth_map_height: u32,
+) -> SceneGraph {
     let mut graph = SceneGraph::default();
 
     // 1. Create a node for each object
     for obj in objects {
         // We only add objects with valid 3D information to the graph
         if obj.distance_meters > 0.0 {
+            // Find the 3D centroid of the points within the object's bounding box
+            let points_in_bbox: Vec<&Point3D> = point_cloud.iter().filter(|p| {
+                // This mapping is approximate and assumes the point cloud and image are aligned.
+                // A more robust solution would use the camera projection matrix.
+                let u = (p.x / p.z) * 500.0 + (depth_map_width as f32 / 2.0); // Simplified projection
+                let v = (p.y / p.z) * 500.0 + (depth_map_height as f32 / 2.0);
+                u >= obj.bbox.x as f32 && u < (obj.bbox.x + obj.bbox.w) as f32 &&
+                v >= obj.bbox.y as f32 && v < (obj.bbox.y + obj.bbox.h) as f32
+            }).collect();
+
+            let centroid = if !points_in_bbox.is_empty() {
+                points_in_bbox.iter().fold(Point3::origin(), |sum, p| sum + p.coords) / (points_in_bbox.len() as f32)
+            } else {
+                // Fallback to the old approximation if no points are found
+                Point3::new(0.0, 0.0, obj.distance_meters)
+            };
+
             graph.nodes.push(Node {
                 label: "unknown".to_string(), // The label is on the C side, needs to be passed in
                 class_id: obj.class_id,
-                // Approximate 3D center
-                center_3d: Point3::new(
-                    (obj.bbox.x as f32 + obj.bbox.w as f32 / 2.0), // These are still 2D coords
-                    (obj.bbox.y as f32 + obj.bbox.h as f32 / 2.0),
-                    obj.distance_meters
-                ),
+                center_3d: centroid,
                 bbox_2d: (obj.bbox.x, obj.bbox.y, obj.bbox.w, obj.bbox.h),
             });
         }
@@ -98,7 +119,14 @@ pub fn build_scene_graph(objects: &[EnrichedObject]) -> SceneGraph {
                     relationship: Relationship::OnTopOf,
                 });
             }
-            // TODO: Infer "NextTo" relationship
+            // Infer "NextTo" relationship
+            if is_next_to(node_a, node_b) {
+                graph.edges.push(Edge {
+                    source_index: i,
+                    target_index: j,
+                    relationship: Relationship::NextTo,
+                });
+            }
         }
     }
 
@@ -107,17 +135,34 @@ pub fn build_scene_graph(objects: &[EnrichedObject]) -> SceneGraph {
 
 /// Checks if node A is on top of node B.
 fn is_on_top_of(a: &Node, b: &Node) -> bool {
-    let bbox_a = a.bbox_2d;
-    let bbox_b = b.bbox_2d;
+    let (ax, ay, aw, ah) = a.bbox_2d;
+    let (bx, by, bw, bh) = b.bbox_2d;
 
-    // Check for vertical alignment: bottom of A is near the top of B
-    let vertical_alignment = (bbox_a.1 + bbox_a.3) > (bbox_b.1 - 10) && (bbox_a.1 + bbox_a.3) < (bbox_b.1 + 10);
+    // Check for vertical alignment (bottom of A is near the top of B)
+    let vertical_alignment = (ay + ah) > (by - 10) && (ay + ah) < (by + 10);
 
     // Check for horizontal overlap
-    let horizontal_overlap = (bbox_a.0 > bbox_b.0) && ((bbox_a.0 + bbox_a.2) < (bbox_b.0 + bbox_b.2));
+    let horizontal_overlap = (ax > bx) && ((ax + aw) < (bx + bw));
 
-    // Check that A is closer (smaller Z value) than B, assuming Z is distance
-    let closer = a.center_3d.z < b.center_3d.z;
+    // Check that A is physically higher than B (in 3D space)
+    let is_higher = a.center_3d.y > b.center_3d.y;
 
-    vertical_alignment && horizontal_overlap && closer
+    vertical_alignment && horizontal_overlap && is_higher
+}
+
+/// Checks if node A is next to node B.
+fn is_next_to(a: &Node, b: &Node) -> bool {
+    let (ax, ay, aw, ah) = a.bbox_2d;
+    let (bx, by, bw, bh) = b.bbox_2d;
+
+    // Check for vertical overlap in 2D (they are at a similar vertical level on screen)
+    let y_overlap = (ay < by + bh) && (ay + ah > by);
+
+    // Check for horizontal proximity in 2D (they are close to each other horizontally)
+    let x_proximity = (ax + aw > bx - 20) && (ax < bx + bw + 20);
+
+    // Check for similar height in 3D space
+    let similar_height = (a.center_3d.y - b.center_3d.y).abs() < 0.2; // 20cm tolerance
+
+    y_overlap && x_proximity && similar_height
 }

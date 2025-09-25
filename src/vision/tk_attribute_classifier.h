@@ -39,6 +39,20 @@ TK_NODISCARD tk_error_code_t tk_classify_dominant_color(
     char** out_color_name
 );
 
-// Future functions like tk_classify_door_state could be added here.
+/**
+ * @brief Determines if a door is open or closed based on line detection.
+ *
+ * @param[in] frame The full video frame.
+ * @param[in] bbox The bounding box of the door object.
+ * @param[out] out_state_name A pointer to a char* that will be allocated and
+ *                            filled with the state (e.g., "open", "closed").
+ *
+ * @return TK_SUCCESS on successful classification.
+ */
+TK_NODISCARD tk_error_code_t tk_classify_door_state(
+    const tk_video_frame_t* frame,
+    const tk_rect_t* bbox,
+    char** out_state_name
+);
 
 #endif // TRACKIELLM_VISION_TK_ATTRIBUTE_CLASSIFIER_H

@@ -53,9 +53,49 @@ void test_classify_red_color() {
     free(image_data);
 }
 
+void test_classify_door_closed() {
+    // 1. Setup: Create an image with strong vertical lines
+    const int width = 100;
+    const int height = 100;
+    uint8_t* image_data = (uint8_t*)malloc(width * height * 3);
+    assert(image_data);
+    memset(image_data, 200, width * height * 3); // Gray background
+
+    // Draw black vertical lines
+    for (int y = 0; y < height; ++y) {
+        for (int x = 20; x < 25; ++x) {
+            image_data[(y * width + x) * 3] = 0;
+            image_data[(y * width + x) * 3 + 1] = 0;
+            image_data[(y * width + x) * 3 + 2] = 0;
+        }
+        for (int x = 70; x < 75; ++x) {
+            image_data[(y * width + x) * 3] = 0;
+            image_data[(y * width + x) * 3 + 1] = 0;
+            image_data[(y * width + x) * 3 + 2] = 0;
+        }
+    }
+
+    tk_video_frame_t frame = { .width = width, .height = height, .data = image_data };
+    tk_rect_t bbox = { .x = 0, .y = 0, .w = width, .h = height };
+    char* state_name = NULL;
+
+    // 2. Act
+    tk_error_code_t err = tk_classify_door_state(&frame, &bbox, &state_name);
+
+    // 3. Assert
+    assert(err == TK_SUCCESS);
+    assert(state_name != NULL);
+    assert(strcmp(state_name, "closed") == 0);
+
+    // 4. Teardown
+    free(state_name);
+    free(image_data);
+}
+
 int main() {
     printf("--- Starting Attribute Classifier Tests ---\n");
     RUN_TEST(test_classify_red_color);
+    RUN_TEST(test_classify_door_closed);
     printf("--- All Attribute Classifier Tests Passed ---\n");
     return 0;
 }

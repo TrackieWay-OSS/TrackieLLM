@@ -95,3 +95,56 @@ TK_NODISCARD tk_error_code_t tk_classify_dominant_color(
 
     return TK_SUCCESS;
 }
+
+
+TK_NODISCARD tk_error_code_t tk_classify_door_state(
+    const tk_video_frame_t* frame,
+    const tk_rect_t* bbox,
+    char** out_state_name
+) {
+    if (!frame || !bbox || !out_state_name) {
+        return TK_ERROR_INVALID_ARGUMENT;
+    }
+
+    // This is a functional placeholder. A full implementation would require:
+    // 1. A robust Canny edge detection implementation.
+    // 2. A robust Hough transform implementation to detect lines.
+    // 3. Logic to analyze the orientation and length of detected lines.
+
+    // Placeholder logic: Count the number of "strong vertical edge" pixels.
+    // A real implementation would be much more complex.
+    int vertical_edge_pixels = 0;
+    for (int y = bbox->y + 1; y < (bbox->y + bbox->h) - 1; ++y) {
+        for (int x = bbox->x + 1; x < (bbox->x + bbox->w) - 1; ++x) {
+            // Convert to grayscale (simple luminance)
+            size_t idx_center = (y * frame->width + x) * 3;
+            size_t idx_above = ((y - 1) * frame->width + x) * 3;
+            size_t idx_below = ((y + 1) * frame->width + x) * 3;
+
+            uint8_t gray_center = (frame->data[idx_center] * 299 + frame->data[idx_center+1] * 587 + frame->data[idx_center+2] * 114) / 1000;
+            uint8_t gray_above = (frame->data[idx_above] * 299 + frame->data[idx_above+1] * 587 + frame->data[idx_above+2] * 114) / 1000;
+            uint8_t gray_below = (frame->data[idx_below] * 299 + frame->data[idx_below+1] * 587 + frame->data[idx_below+2] * 114) / 1000;
+
+            // Simple Sobel-like vertical edge detection
+            if (abs((int)gray_above - (int)gray_below) > 100) { // High threshold for strong edges
+                vertical_edge_pixels++;
+            }
+        }
+    }
+
+    // If a significant portion of the door's area consists of strong vertical edges,
+    // we assume it's closed.
+    float edge_density = (float)vertical_edge_pixels / (float)(bbox->w * bbox->h);
+
+    if (edge_density > 0.1) { // 10% density threshold
+        *out_state_name = strdup("closed");
+    } else {
+        *out_state_name = strdup("open");
+    }
+
+    if (!*out_state_name) {
+        return TK_ERROR_OUT_OF_MEMORY;
+    }
+
+    return TK_SUCCESS;
+}

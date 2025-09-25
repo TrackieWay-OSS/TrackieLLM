@@ -28,26 +28,10 @@ const OBSTACLE_HEIGHT_THRESHOLD_M: f32 = 0.15; // 15cm above the plane is an obs
 const HOLE_DEPTH_THRESHOLD_M: f32 = -0.10;     // 10cm below the plane is a hole
 
 /// Analyzes a depth map to extract navigation cues using 3D point cloud analysis.
-pub fn analyze_navigation_cues(depth_map: &ffi::tk_vision_depth_map_t) -> Option<NavigationCues> {
-    if depth_map.data.is_null() || depth_map.width == 0 || depth_map.height == 0 {
-        return None;
-    }
-
-    // --- 1. Unproject Depth Map to 3D Point Cloud ---
-    // For now, assume camera intrinsics are fixed. In a real system, these would
-    // be part of the configuration.
-    let principal_point_x = depth_map.width as f32 / 2.0;
-    let principal_point_y = depth_map.height as f32 / 2.0;
-    let focal_length = 300.0; // A reasonable guess for a webcam-like camera
-
-    let point_cloud = point_cloud::unproject_to_point_cloud(
-        depth_map,
-        focal_length,
-        focal_length,
-        principal_point_x,
-        principal_point_y,
-    );
-
+pub fn analyze_navigation_cues(
+    point_cloud: &[Point3D],
+    depth_map: &ffi::tk_vision_depth_map_t
+) -> Option<NavigationCues> {
     if point_cloud.is_empty() {
         return None;
     }
@@ -95,9 +79,41 @@ pub fn analyze_navigation_cues(depth_map: &ffi::tk_vision_depth_map_t) -> Option
         }
     }
 
+    let mut detected_vertical_changes = detect_curbs(&point_cloud, &ground_plane);
+
     Some(NavigationCues {
         traversability_grid,
         grid_dimensions: GRID_DIMS,
-        detected_vertical_changes: Vec::new(), // To be implemented later
+        detected_vertical_changes,
     })
+}
+
+/// Analyzes the point cloud to detect vertical, linear structures like curbs.
+fn detect_curbs(point_cloud: &[Point3D], ground_plane: &ransac::Plane) -> Vec<VerticalChange> {
+    // This is a simplified placeholder implementation. A robust solution would be more complex.
+    // 1. Filter points that are near the ground plane.
+    let near_ground_points: Vec<&Point3D> = point_cloud
+        .iter()
+        .filter(|p| ground_plane.distance_to_point(p) < 0.3) // 30cm tolerance
+        .collect();
+
+    // 2. Voxelize or grid the points to analyze density and height changes.
+    // (Skipping for this simplified example)
+
+    // 3. Look for sharp, linear changes in height.
+    // (Placeholder logic)
+    let mut changes = Vec::new();
+    if near_ground_points.len() > 100 {
+        // A dummy logic: if we find a cluster of points slightly above the plane,
+        // we assume it could be a curb.
+        let potential_curb_points: Vec<_> = near_ground_points.iter().filter(|p| p.y > ground_plane.d + 0.1 && p.y < ground_plane.d + 0.2).collect();
+        if potential_curb_points.len() > 50 {
+            changes.push(VerticalChange {
+                height_m: 0.15,
+                status: GroundPlaneStatus::Obstacle,
+                grid_index: (GRID_DIMS.0 / 2, GRID_DIMS.1 -1) // Placeholder index
+            });
+        }
+    }
+    changes
 }
