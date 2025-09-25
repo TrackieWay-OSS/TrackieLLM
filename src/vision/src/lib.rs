@@ -62,6 +62,15 @@ pub mod depth_processing;
 /// Provides a safe wrapper for object detection and analysis.
 pub mod object_analysis;
 
+/// Provides functionality for creating and managing 3D point clouds.
+pub mod point_cloud;
+
+/// Provides the RANSAC algorithm for robust model fitting.
+mod ransac;
+
+/// Provides functionality for building a semantic scene graph.
+pub mod scene_graph;
+
 
 // --- Core Public Data Structures & Types ---
 
@@ -353,4 +362,53 @@ pub unsafe extern "C" fn tk_vision_rust_free_navigation_cues(cues_ptr: *mut CNav
         cues.vertical_changes_count,
         cues.vertical_changes_count,
     );
+}
+
+
+// --- FFI Interface for Scene Graph Construction ---
+
+use std::ffi::CString;
+use std::os::raw::c_char;
+
+/// Builds a scene graph from enriched object data and returns it as a JSON string.
+///
+/// # Safety
+/// The caller MUST ensure that the `enriched_objects_ptr` is valid and that
+/// `object_count` is the correct number of elements. The caller is responsible
+/// for calling `tk_vision_rust_free_string` on the returned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn tk_vision_rust_build_scene_graph(
+    enriched_objects_ptr: *const EnrichedObject,
+    object_count: usize,
+) -> *mut c_char {
+    if enriched_objects_ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let objects = slice::from_raw_parts(enriched_objects_ptr, object_count);
+
+    // Build the graph
+    let scene_graph = scene_graph::build_scene_graph(objects);
+
+    // Serialize to JSON
+    match serde_json::to_string(&scene_graph) {
+        Ok(json_string) => {
+            match CString::new(json_string) {
+                Ok(c_string) => c_string.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            }
+        },
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Frees a string that was allocated by Rust.
+///
+/// # Safety
+/// This function should only be called with a pointer that was previously
+/// returned by a Rust function that allocates a C-compatible string.
+#[no_mangle]
+pub unsafe extern "C" fn tk_vision_rust_free_string(s: *mut c_char) {
+    if !s.is_null() {
+        let _ = CString::from_raw(s);
+    }
 }

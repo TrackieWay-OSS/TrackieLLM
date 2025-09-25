@@ -39,3 +39,16 @@ log = "0.4"
 thiserror = "2.0.16"
 trackiellm-event-bus = { path = "../event_bus" }
 trackiellm-internal-tools = { path = "../internal_tools" }
+
+# For temporal data fusion and object tracking
+kalman-rs = "0.2.0"
+nalgebra = "0.32.3" # Required by kalman-rs
+uuid = { version = "1.4.1", features = ["v4"] }
+lazy_static = "1.4.0"
+
+# For RANSAC algorithm in point cloud processing
+rand = "0.8.5"
+
+# For serializing the scene graph
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

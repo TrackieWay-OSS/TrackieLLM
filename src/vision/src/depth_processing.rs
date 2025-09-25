@@ -15,148 +15,89 @@
  */
 
 use super::ffi;
+use super::point_cloud::{self, Point3D};
+use super::ransac;
 use trackiellm_event_bus::{GroundPlaneStatus, NavigationCues, VerticalChange};
 use std::slice;
 
-// --- Constants for Navigation Analysis ---
-
-/// The dimensions of the grid to impose on the ground plane (width, height).
+// --- Constants for 3D Navigation Analysis ---
 const GRID_DIMS: (u32, u32) = (5, 5);
-/// The vertical portion of the depth map to analyze (e.g., 0.5 means lower half).
-const GROUND_PLANE_VERTICAL_RATIO: f32 = 0.5;
-/// The minimum number of valid depth points required in a cell to consider it for analysis.
-const MIN_VALID_POINTS_PER_CELL: usize = 10;
-/// The depth difference (in meters) to classify something as a "hole" or "obstacle".
-const HOLE_OBSTACLE_THRESHOLD_M: f32 = 0.5;
-/// The depth difference (in meters) to classify a vertical change as a "step".
-const STEP_THRESHOLD_M: f32 = 0.1;
-/// The maximum depth difference to be considered a "ramp" instead of a step.
-const RAMP_THRESHOLD_M: f32 = 0.05;
+const RANSAC_ITERATIONS: usize = 50;
+const RANSAC_DISTANCE_THRESHOLD: f32 = 0.05; // 5cm for a point to be on the plane
+const OBSTACLE_HEIGHT_THRESHOLD_M: f32 = 0.15; // 15cm above the plane is an obstacle
+const HOLE_DEPTH_THRESHOLD_M: f32 = -0.10;     // 10cm below the plane is a hole
 
-
-/// Analyzes a depth map to extract navigation cues like traversable area and hazards.
-///
-/// # Arguments
-/// * `depth_map` - A pointer to the C-level depth map struct.
-///
-/// # Returns
-/// An `Option<NavigationCues>` containing the analysis results. Returns `None` if the
-/// depth map is invalid or analysis cannot be performed.
+/// Analyzes a depth map to extract navigation cues using 3D point cloud analysis.
 pub fn analyze_navigation_cues(depth_map: &ffi::tk_vision_depth_map_t) -> Option<NavigationCues> {
     if depth_map.data.is_null() || depth_map.width == 0 || depth_map.height == 0 {
         return None;
     }
 
-    let depth_data = unsafe {
-        slice::from_raw_parts(depth_map.data, (depth_map.width * depth_map.height) as usize)
-    };
+    // --- 1. Unproject Depth Map to 3D Point Cloud ---
+    // For now, assume camera intrinsics are fixed. In a real system, these would
+    // be part of the configuration.
+    let principal_point_x = depth_map.width as f32 / 2.0;
+    let principal_point_y = depth_map.height as f32 / 2.0;
+    let focal_length = 300.0; // A reasonable guess for a webcam-like camera
 
-    // Define the region of interest (lower part of the image)
-    let roi_y_start = (depth_map.height as f32 * (1.0 - GROUND_PLANE_VERTICAL_RATIO)) as u32;
-    let roi_height = depth_map.height - roi_y_start;
+    let point_cloud = point_cloud::unproject_to_point_cloud(
+        depth_map,
+        focal_length,
+        focal_length,
+        principal_point_x,
+        principal_point_y,
+    );
 
-    let cell_width = depth_map.width / GRID_DIMS.0;
-    let cell_height = roi_height / GRID_DIMS.1;
-
-    let mut avg_depths = vec![0.0; (GRID_DIMS.0 * GRID_DIMS.1) as usize];
-    let mut traversability_grid = vec![GroundPlaneStatus::Unknown; avg_depths.len()];
-    let mut detected_vertical_changes = Vec::new();
-
-    // 1. Calculate the average depth for each cell in the grid
-    for gy in 0..GRID_DIMS.1 {
-        for gx in 0..GRID_DIMS.0 {
-            let x_start = gx * cell_width;
-            let y_start = roi_y_start + (gy * cell_height);
-            let x_end = x_start + cell_width;
-            let y_end = y_start + cell_height;
-
-            let mut valid_points = Vec::new();
-            for y in y_start..y_end {
-                for x in x_start..x_end {
-                    let idx = (y * depth_map.width + x) as usize;
-                    if idx < depth_data.len() && depth_data[idx] > 0.0 {
-                        valid_points.push(depth_data[idx]);
-                    }
-                }
-            }
-
-            if valid_points.len() >= MIN_VALID_POINTS_PER_CELL {
-                let sum: f32 = valid_points.iter().sum();
-                avg_depths[(gy * GRID_DIMS.0 + gx) as usize] = sum / valid_points.len() as f32;
-            }
-        }
-    }
-
-    // 2. Analyze the grid to determine traversability and find hazards
-    // We assume the closest cell (bottom center) is our reference ground plane
-    let reference_cell_gx = GRID_DIMS.0 / 2;
-    let reference_cell_gy = GRID_DIMS.1 - 1; // Last row
-    let reference_idx = (reference_cell_gy * GRID_DIMS.0 + reference_cell_gx) as usize;
-    let reference_depth = avg_depths[reference_idx];
-
-    if reference_depth <= 0.0 {
-        // Cannot perform analysis without a valid reference point
+    if point_cloud.is_empty() {
         return None;
     }
 
+    // --- 2. Find the Ground Plane using RANSAC ---
+    let ground_plane = ransac::find_plane_ransac(
+        &point_cloud,
+        RANSAC_ITERATIONS,
+        RANSAC_DISTANCE_THRESHOLD,
+    )?;
+
+    // --- 3. Classify Grid Cells based on the Ground Plane ---
+    let mut traversability_grid = vec![GroundPlaneStatus::Unknown; (GRID_DIMS.0 * GRID_DIMS.1) as usize];
+    let cell_width_3d = (principal_point_x * 2.0 / focal_length * 5.0) / GRID_DIMS.0 as f32; // Approx 3D width of a cell at 5m
+    let cell_depth_3d = 5.0 / GRID_DIMS.1 as f32; // Approx 3D depth of a cell
+
     for gy in 0..GRID_DIMS.1 {
         for gx in 0..GRID_DIMS.0 {
-            let current_idx = (gy * GRID_DIMS.0 + gx) as usize;
-            let current_depth = avg_depths[current_idx];
+            let cell_center_x = (gx as f32 - (GRID_DIMS.0 as f32 / 2.0)) * cell_width_3d;
+            let cell_center_z = (GRID_DIMS.1 - gy) as f32 * cell_depth_3d;
 
-            if current_depth <= 0.0 {
-                traversability_grid[current_idx] = GroundPlaneStatus::Unknown;
-                continue;
-            }
+            let points_in_cell: Vec<&Point3D> = point_cloud
+                .iter()
+                .filter(|p| {
+                    (p.x - cell_center_x).abs() < cell_width_3d / 2.0
+                        && (p.z - cell_center_z).abs() < cell_depth_3d / 2.0
+                })
+                .collect();
 
-            let depth_diff = current_depth - reference_depth;
+            if points_in_cell.is_empty() { continue; }
 
-            // Basic classification
-            if depth_diff.abs() < RAMP_THRESHOLD_M {
-                traversability_grid[current_idx] = GroundPlaneStatus::Flat;
-            } else if depth_diff > HOLE_OBSTACLE_THRESHOLD_M {
-                traversability_grid[current_idx] = GroundPlaneStatus::Hole;
-            } else if depth_diff < -HOLE_OBSTACLE_THRESHOLD_M {
-                traversability_grid[current_idx] = GroundPlaneStatus::Obstacle;
-            }
+            let avg_height_from_plane: f32 = points_in_cell
+                .iter()
+                .map(|p| p.y - (-ground_plane.normal.x * p.x - ground_plane.normal.z * p.z + ground_plane.d) / ground_plane.normal.y)
+                .sum::<f32>() / points_in_cell.len() as f32;
 
-            // Check for vertical changes with the cell directly "below" (closer to the viewer)
-            if gy < GRID_DIMS.1 - 1 {
-                let below_idx = ((gy + 1) * GRID_DIMS.0 + gx) as usize;
-                let below_depth = avg_depths[below_idx];
-
-                if below_depth > 0.0 {
-                    let vertical_diff = current_depth - below_depth;
-
-                    if vertical_diff.abs() > STEP_THRESHOLD_M {
-                        let status = if vertical_diff > 0.0 {
-                            GroundPlaneStatus::Hole // A drop-off
-                        } else {
-                            GroundPlaneStatus::Obstacle // A step up
-                        };
-
-                        detected_vertical_changes.push(VerticalChange {
-                            height_m: vertical_diff.abs(),
-                            status,
-                            grid_index: (gx, gy),
-                        });
-                    } else if vertical_diff.abs() > RAMP_THRESHOLD_M {
-                         let status = if vertical_diff > 0.0 {
-                            GroundPlaneStatus::RampDown
-                        } else {
-                            GroundPlaneStatus::RampUp
-                        };
-                         traversability_grid[current_idx] = status;
-                    }
-                }
+            let grid_idx = (gy * GRID_DIMS.0 + gx) as usize;
+            if avg_height_from_plane > OBSTACLE_HEIGHT_THRESHOLD_M {
+                traversability_grid[grid_idx] = GroundPlaneStatus::Obstacle;
+            } else if avg_height_from_plane < HOLE_DEPTH_THRESHOLD_M {
+                traversability_grid[grid_idx] = GroundPlaneStatus::Hole;
+            } else {
+                traversability_grid[grid_idx] = GroundPlaneStatus::Flat;
             }
         }
     }
-
 
     Some(NavigationCues {
         traversability_grid,
         grid_dimensions: GRID_DIMS,
-        detected_vertical_changes,
+        detected_vertical_changes: Vec::new(), // To be implemented later
     })
 }

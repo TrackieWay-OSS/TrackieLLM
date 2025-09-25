@@ -156,6 +156,15 @@ TK_NODISCARD tk_error_code_t tk_object_detector_detect(
  */
 void tk_object_detector_free_results(tk_detection_result_t** results);
 
+/**
+ * @brief Updates the confidence and IOU thresholds at runtime.
+ *
+ * @param[in] detector The object detector instance.
+ * @param[in] confidence_threshold The new confidence threshold (0.0 to 1.0).
+ * @param[in] iou_threshold The new IOU threshold for NMS (0.0 to 1.0).
+ */
+void tk_object_detector_update_thresholds(tk_object_detector_t* detector, float confidence_threshold, float iou_threshold);
+
 
 #ifdef __cplusplus
 }

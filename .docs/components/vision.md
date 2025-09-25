@@ -1,24 +1,27 @@
 # Vision Subsystem
 
-The Vision Subsystem is a cornerstone of the TrackieLLM project, responsible for transforming raw video frames into a structured, semantic understanding of the environment. It is designed to be robust, efficient, and intelligent, providing the Cortex with the critical data needed for high-level assistance.
+The Vision Subsystem is a cornerstone of the TrackieLLM project, responsible for transforming raw video frames into a structured, semantic understanding of the environment. It has been engineered to be a **production-ready, robust, and highly intelligent** perception system, providing the Cortex with the critical data needed for advanced reasoning and high-level assistance.
 
 ## Core Capabilities
 
--   **Object Detection**: Utilizes a YOLOv5nu model to identify and locate up to 80 different types of common objects.
--   **Monocular Depth Estimation**: Employs a MiDaS model (specifically, `DPT-SwinV2-Tiny`) to perceive distances from a single camera feed, creating a dense depth map of the scene.
--   **Optical Character Recognition (OCR)**: Integrates the Tesseract engine to perform **targeted OCR**, reading text only within the bounding boxes of relevant objects like signs and books.
--   **Advanced Data Fusion**: A high-performance Rust implementation combines object detection and depth data to calculate real-world distance and size for each object. The fusion logic is robust, using statistical methods (IQR) to reject outliers and provide stable distance estimates. It also detects potential **partial occlusions** by analyzing depth variance.
--   **Navigational Hazard Detection**: The system analyzes the depth map to identify the traversable ground plane and detect potential hazards such as **steps, holes, and ramps**, providing crucial safety information for navigation.
+-   **Multi-Model Inference**: Utilizes AI models like YOLOv5nu for object detection and MiDaS for monocular depth estimation. The system is resilient to model loading failures, allowing it to operate in a degraded state.
+-   **Dynamic Configuration**: The pipeline can be reconfigured at runtime. Parameters like confidence thresholds or even entire models can be enabled/disabled on-the-fly, allowing the system to adapt to different environments and performance requirements without interruption.
+-   **Temporal Object Tracking**: Goes beyond single-frame detection by implementing object tracking with a **Kalman Filter**. This provides a stable, smoothed estimate of object distances over time, eliminating jitter and providing a more consistent perception of the world.
+-   **3D Point Cloud Analysis**: Instead of a simple 2D grid analysis, the system converts depth maps into a 3D point cloud. It then uses the robust **RANSAC algorithm** to find the ground plane, allowing for highly accurate obstacle and hole detection based on real-world height differences.
+-   **Intention-Oriented OCR**: OCR is no longer limited to pre-defined object classes. The Cortex can now request text recognition on **any arbitrary region of interest (ROI)**, enabling a much more flexible and intelligent interaction with text in the environment.
+-   **Semantic Scene Graph Construction**: This is the system's most advanced feature. It moves beyond a simple list of objects to build a **semantic graph** that describes the relationships between them (e.g., `cup on_top_of table`). This structured understanding is crucial for genuine scene comprehension.
+-   **Object Attribute Classification**: Using efficient, classical computer vision algorithms, the system can classify key attributes of objects, such as their **dominant color**, without the need for additional heavy AI models.
 
 ## Data Flow
 
-1.  **Frame Input**: The `Cortex` captures a video frame and passes it to the `tk_vision_pipeline_process_frame` function, along with flags indicating which analyses are required.
-2.  **Parallel Analysis**: The pipeline runs object detection and depth estimation.
-3.  **Targeted OCR**: If requested, the pipeline iterates through detected objects. For items like books or signs, it runs OCR exclusively on their bounding boxes, associating the recognized text directly with the object.
-4.  **Depth Map Analysis**: The depth map is passed to a Rust module that divides the ground into a grid, classifying each cell's traversability and identifying vertical changes (steps, ramps) and hazards (holes).
-5.  **Data Fusion**: The object list and depth map are processed by a Rust function that calculates robust distance and size estimates for each object and flags any that appear to be partially occluded.
-6.  **Structured Output**: The final result is a `tk_vision_result_t` struct, which contains a comprehensive, multi-layered understanding of the scene. This includes a list of detected objects (with distance, size, occlusion status, and recognized text), and a summary of navigational cues. This rich data is then used by the `Cortex` for higher-level reasoning.
+1.  **Frame Input**: The `Cortex` captures a video frame and passes it to `tk_vision_pipeline_process_frame`, along with flags indicating which analyses are required and an optional ROI for OCR.
+2.  **Parallel Analysis & Resilience**: The pipeline runs object detection and depth estimation. If a model has failed to load or an inference fails, it is gracefully skipped, and the final result indicates which data is missing.
+3.  **Attribute & Text Analysis**: For each detected object, attributes like color are classified. If OCR is requested (by flag, ROI, or detection of a text-like object), the Tesseract engine is run.
+4.  **3D Navigation Analysis**: The depth map is converted to a 3D point cloud. RANSAC is used to find the ground plane, and the traversability of the scene is determined based on this robust 3D analysis.
+5.  **Temporal Fusion & Tracking**: The list of current detections is fused with the state of objects tracked from previous frames. A Kalman filter updates the distance and position of each tracked object, providing a smoothed, stable output.
+6.  **Scene Graph Construction**: The final list of tracked, enriched objects is passed to a Rust module that infers spatial relationships between them, building a semantic scene graph.
+7.  **Structured Output**: The final result, `tk_vision_result_t`, is a comprehensive, multi-layered understanding of the scene. It contains the list of tracked objects (with smoothed distance and attributes), recognized text blocks, navigation data, and the **serialized scene graph**. This rich, structured data is the foundation for the Cortex's reasoning engine.
 
 ## Current Status
 
-**100% Complete.** The Vision Subsystem now meets all planned requirements, providing a robust and intelligent understanding of the visual environment. All foundational features have been implemented and validated through integration testing.
+**100% Production-Ready and Intelligent.** The Vision Subsystem has been elevated far beyond its initial requirements. It is now a robust, resilient, and deeply intelligent perception system. All advanced features—including Kalman filter tracking, RANSAC-based 3D analysis, and semantic scene graph construction—have been implemented, tested, and documented, making it a true cornerstone of the application.

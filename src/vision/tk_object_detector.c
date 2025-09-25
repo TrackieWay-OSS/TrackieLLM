@@ -32,6 +32,9 @@
 #include "gpu/tk_gpu_helper.h"
 #endif
 
+#include "tk_image_preprocessor.h" // Include the new preprocessor
+#include "cortex/tk_cortex_main.h" // For tk_video_frame_t definition
+
 // Internal constants
 #define TK_OBJECT_DETECTOR_MAX_DETECTIONS 500
 
@@ -52,6 +55,7 @@ struct tk_object_detector_s {
     size_t input_tensor_size;
     
     // CPU-side buffers
+    float* host_input_buffer;  // For CPU pre-processing output
     float* host_output_buffer;
     
     // GPU-side buffers (only for CUDA backend)
@@ -116,16 +120,23 @@ TK_NODISCARD tk_error_code_t tk_object_detector_create(tk_object_detector_t** ou
     OrtReleaseTypeInfo(type_info);
 
     // Allocate buffers
+    detector->input_tensor_size = 1 * 3 * config->input_height * config->input_width;
 #ifdef TRACKIELLM_ENABLE_CUDA
     if (detector->config.backend == TK_VISION_BACKEND_CUDA) {
         // Allocate GPU buffers
         size_t input_image_bytes = config->input_width * config->input_height * 3;
         cudaMalloc(&detector->d_input_image, input_image_bytes);
-
-        detector->input_tensor_size = 1 * 3 * config->input_height * config->input_width;
         cudaMalloc(&detector->d_input_tensor, detector->input_tensor_size * sizeof(float));
-    }
+    } else
 #endif
+    {
+        // Allocate CPU buffer
+        detector->host_input_buffer = (float*)malloc(detector->input_tensor_size * sizeof(float));
+        if (!detector->host_input_buffer) {
+            tk_object_detector_destroy(&detector);
+            return TK_ERROR_OUT_OF_MEMORY;
+        }
+    }
     // Allocate a host buffer for the output tensor regardless of backend
     OrtTypeInfo* output_type_info;
     OrtSessionGetOutputTypeInfo(detector->session, 0, &output_type_info);
@@ -153,6 +164,8 @@ void tk_object_detector_destroy(tk_object_detector_t** detector) {
     if (d->config.backend == TK_VISION_BACKEND_CUDA) {
         cudaFree(d->d_input_image);
         cudaFree(d->d_input_tensor);
+    } else {
+        free(d->host_input_buffer);
     }
 #endif
     free(d->host_output_buffer);
@@ -196,6 +209,15 @@ void tk_object_detector_free_results(tk_detection_result_t** results) {
     }
 }
 
+void tk_object_detector_update_thresholds(tk_object_detector_t* detector, float confidence_threshold, float iou_threshold) {
+    if (!detector) return;
+
+    // Note: This function assumes that thread safety is handled by the caller
+    // (e.g., the vision pipeline's mutex).
+    detector->config.confidence_threshold = confidence_threshold;
+    detector->config.iou_threshold = iou_threshold;
+}
+
 // --- Internal Helpers ---
 
 static tk_error_code_t preprocess_frame(tk_object_detector_t* detector,
@@ -221,30 +243,37 @@ static tk_error_code_t preprocess_frame(tk_object_detector_t* detector,
         return tk_kernels_preprocess_image(&params, 0); // Use default stream
     }
 #endif
-    // Fallback to basic CPU pre-processing
-    // (A more robust implementation would be needed here for production CPU usage)
-    // For now, this path is considered a placeholder.
-    return TK_ERROR_NOT_IMPLEMENTED;
+    // Fallback to CPU pre-processing using the new centralized module
+    // These mean/std_dev values would typically come from the config
+    const float mean[3] = {0.485f, 0.456f, 0.406f};
+    const float std_dev[3] = {0.229f, 0.224f, 0.225f};
+
+    return tk_preprocessor_resize_and_normalize_to_chw(
+        frame,
+        detector->host_input_buffer,
+        detector->config.input_width,
+        detector->config.input_height,
+        mean,
+        std_dev
+    );
 }
 
 static tk_error_code_t run_inference(tk_object_detector_t* detector, const tk_video_frame_t* frame) {
     OrtMemoryInfo* memory_info;
-    OrtCreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &memory_info);
-    
     OrtValue* input_tensor = NULL;
 
 #ifdef TRACKIELLM_ENABLE_CUDA
     if (detector->config.backend == TK_VISION_BACKEND_CUDA) {
-        OrtReleaseMemoryInfo(memory_info); // Release CPU info, we need CUDA info
         OrtCreateMemoryInfo("Cuda", OrtDeviceAllocator, detector->config.gpu_device_id, OrtMemTypeDevice, &memory_info);
         OrtCreateTensorWithDataAsOrtValue(memory_info, detector->d_input_tensor, detector->input_tensor_size * sizeof(float),
                                           detector->input_node_dims, 4, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &input_tensor);
     } else
 #endif
     {
-        // CPU path would need a valid host-side buffer here
-        // The placeholder CPU pre-processing doesn't produce one correctly
-        return TK_ERROR_NOT_IMPLEMENTED;
+        // CPU path uses the host-side buffer filled by the preprocessor
+        OrtCreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &memory_info);
+        OrtCreateTensorWithDataAsOrtValue(memory_info, detector->host_input_buffer, detector->input_tensor_size * sizeof(float),
+                                          detector->input_node_dims, 4, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &input_tensor);
     }
 
     const char* input_names[] = { detector->input_node_name };

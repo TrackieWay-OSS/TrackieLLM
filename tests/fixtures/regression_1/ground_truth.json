@@ -1,0 +1,26 @@
+{
+  "image_file": "cup_on_table.png",
+  "expected_objects": [
+    {
+      "label": "cup",
+      "attributes": "color:red"
+    },
+    {
+      "label": "table",
+      "attributes": "color:brown"
+    }
+  ],
+  "expected_scene_graph": {
+    "nodes": [
+      {"label": "cup"},
+      {"label": "table"}
+    ],
+    "edges": [
+      {
+        "source_index": 0,
+        "target_index": 1,
+        "relationship": "OnTopOf"
+      }
+    ]
+  }
+}
