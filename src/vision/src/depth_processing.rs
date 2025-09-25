@@ -90,30 +90,51 @@ pub fn analyze_navigation_cues(
 
 /// Analyzes the point cloud to detect vertical, linear structures like curbs.
 fn detect_curbs(point_cloud: &[Point3D], ground_plane: &ransac::Plane) -> Vec<VerticalChange> {
-    // This is a simplified placeholder implementation. A robust solution would be more complex.
-    // 1. Filter points that are near the ground plane.
-    let near_ground_points: Vec<&Point3D> = point_cloud
+    const CURB_MIN_HEIGHT: f32 = 0.08; // 8cm
+    const CURB_MAX_HEIGHT: f32 = 0.25; // 25cm
+    const POINT_DENSITY_THRESHOLD: usize = 10;
+
+    // Remove the ground plane to isolate obstacles
+    let obstacle_points: Vec<Point3D> = point_cloud
         .iter()
-        .filter(|p| ground_plane.distance_to_point(p) < 0.3) // 30cm tolerance
+        .filter(|p| {
+            let height_from_plane = p.y - (-ground_plane.normal.x * p.x - ground_plane.normal.z * p.z + ground_plane.d) / ground_plane.normal.y;
+            height_from_plane > CURB_MIN_HEIGHT
+        })
+        .cloned()
         .collect();
 
-    // 2. Voxelize or grid the points to analyze density and height changes.
-    // (Skipping for this simplified example)
+    if obstacle_points.is_empty() {
+        return Vec::new();
+    }
 
-    // 3. Look for sharp, linear changes in height.
-    // (Placeholder logic)
-    let mut changes = Vec::new();
-    if near_ground_points.len() > 100 {
-        // A dummy logic: if we find a cluster of points slightly above the plane,
-        // we assume it could be a curb.
-        let potential_curb_points: Vec<_> = near_ground_points.iter().filter(|p| p.y > ground_plane.d + 0.1 && p.y < ground_plane.d + 0.2).collect();
-        if potential_curb_points.len() > 50 {
-            changes.push(VerticalChange {
-                height_m: 0.15,
+    // Grid the obstacle points to find dense vertical clusters
+    let mut grid: std::collections::HashMap<(i32, i32), Vec<f32>> = std::collections::HashMap::new();
+    for p in &obstacle_points {
+        let grid_x = (p.x / 0.1).round() as i32;
+        let grid_z = (p.z / 0.2).round() as i32;
+        grid.entry((grid_x, grid_z)).or_default().push(p.y);
+    }
+
+    let mut detected_curbs = Vec::new();
+    for ((gx, gz), ys) in grid.iter() {
+        if ys.len() < POINT_DENSITY_THRESHOLD { continue; }
+
+        let min_y = ys.iter().fold(f32::MAX, |a, &b| a.min(b));
+        let max_y = ys.iter().fold(f32::MIN, |a, &b| a.max(b));
+        let height = max_y - min_y;
+
+        if height > CURB_MIN_HEIGHT && height < CURB_MAX_HEIGHT {
+            // Found a potential curb segment
+            detected_curbs.push(VerticalChange {
+                height_m: height,
                 status: GroundPlaneStatus::Obstacle,
-                grid_index: (GRID_DIMS.0 / 2, GRID_DIMS.1 -1) // Placeholder index
+                // Approximate the grid index from the 3D grid coordinates
+                grid_index: (*gx as u32, *gz as u32),
             });
         }
     }
-    changes
+
+    // In a full implementation, we would merge adjacent curb segments into a single line.
+    detected_curbs
 }
