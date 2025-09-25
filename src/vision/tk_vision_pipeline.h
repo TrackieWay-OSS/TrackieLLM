@@ -89,6 +89,12 @@ enum {
     TK_VISION_ANALYZE_NAVIGATION_CUES      = 1 << 4,
 
     /**
+     * @brief A meta-flag to build a semantic scene graph from the detected objects.
+     * Requires FUSION_DISTANCE to be active.
+     */
+    TK_VISION_ANALYZE_SCENE_GRAPH          = 1 << 5,
+
+    /**
      * @brief A common preset for general environmental awareness.
      */
     TK_VISION_PRESET_ENVIRONMENT_AWARENESS = TK_VISION_ANALYZE_OBJECT_DETECTION |
@@ -96,6 +102,24 @@ enum {
                                              TK_VISION_ANALYZE_FUSION_DISTANCE |
                                              TK_VISION_ANALYZE_NAVIGATION_CUES
 };
+
+/**
+ * @typedef tk_vision_valid_result_flags_t
+ * @brief A bitmask indicating which analyses in a result are valid.
+ *
+ * If a model fails to load or an inference fails, the corresponding analysis
+ * will not have its bit set in the `valid_analyses_mask` of the result.
+ */
+typedef uint32_t tk_vision_valid_result_flags_t;
+enum {
+    TK_VISION_RESULT_NONE                 = 0,
+    TK_VISION_RESULT_OBJECT_DETECTION     = 1 << 0, /**< Object detection data is valid. */
+    TK_VISION_RESULT_DEPTH_ESTIMATION     = 1 << 1, /**< Depth map data is valid. */
+    TK_VISION_RESULT_OCR                  = 1 << 2, /**< OCR data is valid. */
+    TK_VISION_RESULT_FUSION_DISTANCE      = 1 << 3, /**< Distance fusion data is valid. */
+    TK_VISION_RESULT_NAVIGATION_CUES      = 1 << 4, /**< Navigation cue data is valid. */
+};
+
 
 /**
  * @struct tk_vision_pipeline_config_t
@@ -112,6 +136,20 @@ typedef struct {
     float               focal_length_x;     /**< Camera focal length in x direction (pixels). */
     float               focal_length_y;     /**< Camera focal length in y direction (pixels). */
 } tk_vision_pipeline_config_t;
+
+/**
+ * @struct tk_vision_runtime_config_t
+ * @brief Configuration parameters that can be updated during runtime.
+ *
+ * This allows for dynamic adaptation of the pipeline to changing conditions
+ * or requirements without needing to recreate the entire pipeline.
+ */
+typedef struct {
+    float    object_confidence_threshold; /**< New confidence threshold for object detection. */
+    float    iou_threshold;               /**< New IOU threshold for Non-Maximal Suppression. */
+    bool     enable_object_detection;     /**< Flag to dynamically enable/disable the object detector. */
+    bool     enable_depth_estimation;     /**< Flag to dynamically enable/disable the depth estimator. */
+} tk_vision_runtime_config_t;
 
 /**
  * @struct tk_rect_t
@@ -138,6 +176,7 @@ typedef struct {
     float       height_meters;  /**< The estimated height of the object in meters. Populated by fusion. */
     bool        is_partially_occluded; /**< Flag indicating if the object might be partially occluded. Populated by fusion. */
     char*       recognized_text;/**< Text recognized via OCR within this object's bbox. Owned by the object. */
+    char*       attributes;     /**< Comma-separated key-value pairs of attributes (e.g., "color:red"). Owned by the object. */
 } tk_vision_object_t;
 
 /**
@@ -168,15 +207,17 @@ typedef struct {
  * and must be freed by the caller using `tk_vision_result_destroy`.
  */
 struct tk_vision_result_s {
-    uint64_t                source_frame_timestamp_ns; /**< Timestamp of the input frame for synchronization. */
+    uint64_t                        source_frame_timestamp_ns; /**< Timestamp of the input frame for synchronization. */
+    tk_vision_valid_result_flags_t  valid_analyses_mask; /**< Bitmask indicating which results are valid. */
     
-    size_t                  object_count;   /**< Number of valid objects in the `objects` array. */
+    size_t                          object_count;   /**< Number of valid objects in the `objects` array. */
     tk_vision_object_t*     objects;        /**< Dynamically allocated array of detected objects. */
 
     size_t                  text_block_count; /**< Number of valid blocks in the `text_blocks` array. */
     tk_vision_text_block_t* text_blocks;    /**< Dynamically allocated array of recognized text blocks. */
 
     tk_vision_depth_map_t*  depth_map;      /**< Pointer to the depth map data. May be NULL if not requested. */
+    char*                   serialized_scene_graph; /**< A JSON string representing the scene graph. Owned by the result. */
 };
 
 #ifdef __cplusplus
@@ -218,6 +259,23 @@ TK_NODISCARD tk_error_code_t tk_vision_pipeline_create(tk_vision_pipeline_t** ou
  */
 void tk_vision_pipeline_destroy(tk_vision_pipeline_t** pipeline);
 
+
+/**
+ * @brief Updates the pipeline's configuration parameters at runtime.
+ *
+ * This function allows for thread-safe modification of key parameters like
+ * confidence thresholds or enabling/disabling specific models without
+ * interrupting the pipeline's operation.
+ *
+ * @param[in] pipeline The vision pipeline instance to update.
+ * @param[in] config A pointer to the runtime configuration structure.
+ *
+ * @return TK_SUCCESS on successful update.
+ * @return TK_ERROR_INVALID_ARGUMENT if pipeline or config is NULL.
+ * @return TK_ERROR_NOT_SUPPORTED if a parameter is not dynamically updatable.
+ */
+TK_NODISCARD tk_error_code_t tk_vision_pipeline_update_config(tk_vision_pipeline_t* pipeline, const tk_vision_runtime_config_t* config);
+
 //------------------------------------------------------------------------------
 // Core Processing Function
 //------------------------------------------------------------------------------
@@ -234,6 +292,8 @@ void tk_vision_pipeline_destroy(tk_vision_pipeline_t** pipeline);
  * @param[in] video_frame The raw video frame data to be processed. The pixel
  *                        format must be compatible (e.g., RGB8).
  * @param[in] analysis_flags A bitmask specifying which analyses to perform.
+ * @param[in] ocr_roi Optional. A pointer to a rectangle specifying a region
+ *                    of interest for targeted OCR. Can be NULL.
  * @param[in] timestamp_ns A nanosecond-resolution timestamp for the frame.
  * @param[out] out_result A pointer to a tk_vision_result_t* that will receive
  *                        the address of the newly allocated result object. The
@@ -253,6 +313,7 @@ TK_NODISCARD tk_error_code_t tk_vision_pipeline_process_frame(
     tk_vision_pipeline_t* pipeline,
     const tk_video_frame_t* video_frame,
     tk_vision_analysis_flags_t analysis_flags,
+    const tk_rect_t* ocr_roi, // Optional: Specify a region for targeted OCR
     uint64_t timestamp_ns,
     tk_vision_result_t** out_result
 );

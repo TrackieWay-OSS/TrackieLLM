@@ -62,6 +62,15 @@ pub mod depth_processing;
 /// Provides a safe wrapper for object detection and analysis.
 pub mod object_analysis;
 
+/// Provides functionality for creating and managing 3D point clouds.
+pub mod point_cloud;
+
+/// Provides the RANSAC algorithm for robust model fitting.
+mod ransac;
+
+/// Provides functionality for building a semantic scene graph.
+pub mod scene_graph;
+
 
 // --- Core Public Data Structures & Types ---
 
@@ -298,6 +307,7 @@ pub struct CNavigationCues {
     pub grid_height: u32,
     pub detected_vertical_changes: *const CVerticalChange,
     pub vertical_changes_count: usize,
+    pub point_cloud: CPointCloud, // Add the point cloud to the result
 }
 
 #[no_mangle]
@@ -309,19 +319,36 @@ pub unsafe extern "C" fn tk_vision_rust_analyze_navigation(
     }
     let depth_map = &*depth_map_ptr;
 
-    match depth_processing::analyze_navigation_cues(depth_map) {
+    // --- Generate the point cloud once ---
+    let principal_point_x = depth_map.width as f32 / 2.0;
+    let principal_point_y = depth_map.height as f32 / 2.0;
+    let focal_length = 300.0;
+    let point_cloud_vec = point_cloud::unproject_to_point_cloud(
+        depth_map,
+        focal_length,
+        focal_length,
+        principal_point_x,
+        principal_point_y,
+    );
+
+    match depth_processing::analyze_navigation_cues(&point_cloud_vec, depth_map) {
         Some(cues) => {
             let c_grid: Vec<CGroundPlaneStatus> = cues
                 .traversability_grid
                 .into_iter()
                 .map(|s| s.into())
                 .collect();
-
             let c_changes: Vec<CVerticalChange> = cues
                 .detected_vertical_changes
                 .into_iter()
                 .map(|c| c.into())
                 .collect();
+
+            // --- Package the point cloud for C ---
+            let c_point_cloud = CPointCloud {
+                points: point_cloud_vec.leak().as_ptr(),
+                count: point_cloud_vec.len(),
+            };
 
             let result = CNavigationCues {
                 traversability_grid: c_grid.leak().as_ptr(),
@@ -330,6 +357,7 @@ pub unsafe extern "C" fn tk_vision_rust_analyze_navigation(
                 grid_height: cues.grid_dimensions.1,
                 detected_vertical_changes: c_changes.leak().as_ptr(),
                 vertical_changes_count: c_changes.len(),
+                point_cloud: c_point_cloud,
             };
             Box::into_raw(Box::new(result))
         }
@@ -353,4 +381,69 @@ pub unsafe extern "C" fn tk_vision_rust_free_navigation_cues(cues_ptr: *mut CNav
         cues.vertical_changes_count,
         cues.vertical_changes_count,
     );
+    let _ = Vec::from_raw_parts(
+        cues.point_cloud.points as *mut Point3D,
+        cues.point_cloud.count,
+        cues.point_cloud.count,
+    );
+}
+
+
+// --- FFI Interface for Scene Graph Construction ---
+
+use std::ffi::CString;
+use std::os::raw::c_char;
+use crate::point_cloud::Point3D;
+
+#[repr(C)]
+pub struct CPointCloud {
+    pub points: *const Point3D,
+    pub count: usize,
+}
+
+/// Builds a scene graph from enriched object data and returns it as a JSON string.
+///
+/// # Safety
+/// The caller MUST ensure that all pointers are valid and that counts are correct.
+/// The caller is responsible for calling `tk_vision_rust_free_string` on the returned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn tk_vision_rust_build_scene_graph(
+    enriched_objects_ptr: *const EnrichedObject,
+    object_count: usize,
+    point_cloud_ptr: *const CPointCloud,
+    depth_map_width: u32,
+    depth_map_height: u32,
+) -> *mut c_char {
+    if enriched_objects_ptr.is_null() || point_cloud_ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let objects = slice::from_raw_parts(enriched_objects_ptr, object_count);
+    let point_cloud_c = &*point_cloud_ptr;
+    let point_cloud = slice::from_raw_parts(point_cloud_c.points, point_cloud_c.count);
+
+    // Build the graph
+    let scene_graph = scene_graph::build_scene_graph(objects, point_cloud, depth_map_width, depth_map_height);
+
+    // Serialize to JSON
+    match serde_json::to_string(&scene_graph) {
+        Ok(json_string) => {
+            match CString::new(json_string) {
+                Ok(c_string) => c_string.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            }
+        },
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Frees a string that was allocated by Rust.
+///
+/// # Safety
+/// This function should only be called with a pointer that was previously
+/// returned by a Rust function that allocates a C-compatible string.
+#[no_mangle]
+pub unsafe extern "C" fn tk_vision_rust_free_string(s: *mut c_char) {
+    if !s.is_null() {
+        let _ = CString::from_raw(s);
+    }
 }

@@ -21,6 +21,11 @@ add_test(NAME cortex_full_integration_test COMMAND tk_cortex_full_test)
 # target_link_libraries(tk_vision_full_test PRIVATE vision utils internal_tools)
 # add_test(NAME vision_full_integration_test COMMAND tk_vision_full_test)
 
+# Add the Attribute Classifier test
+add_executable(tk_attribute_classifier_test tk_attribute_classifier_test.c)
+target_link_libraries(tk_attribute_classifier_test PRIVATE vision cortex utils)
+add_test(NAME attribute_classifier_test COMMAND tk_attribute_classifier_test)
+
 # --- ALL OTHER TESTS DISABLED FOR DEBUGGING ---
 
 # # Find CUDA, which is required for GPU tests

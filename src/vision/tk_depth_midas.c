@@ -36,6 +36,10 @@
 #include <cuda_provider_factory.h>
 #endif
 
+#include "tk_image_preprocessor.h" // Include the new preprocessor
+#include "cortex/tk_cortex_main.h" // For tk_video_frame_t definition
+
+
 // Internal constants
 #define TK_DEPTH_ESTIMATOR_INPUT_NAME "input"
 #define TK_DEPTH_ESTIMATOR_OUTPUT_NAME "output"
@@ -60,7 +64,6 @@ struct tk_depth_estimator_s {
     
     // Pre-processing buffers
     float* input_tensor_values;
-    uint8_t* resized_frame_buffer;
     
     // Post-processing buffers
     float* raw_depth_values;
@@ -336,13 +339,6 @@ static tk_error_code_t allocate_buffers(tk_depth_estimator_t* estimator) {
         return TK_ERROR_OUT_OF_MEMORY;
     }
     
-    // Allocate resized frame buffer
-    uint32_t input_width = estimator->config.input_width;
-    uint32_t input_height = estimator->config.input_height;
-    estimator->resized_frame_buffer = (uint8_t*)malloc(input_width * input_height * 3 * sizeof(uint8_t));
-    if (!estimator->resized_frame_buffer) {
-        return TK_ERROR_OUT_OF_MEMORY;
-    }
     
     // Allocate raw depth values buffer
     estimator->raw_depth_values = (float*)malloc(estimator->output_tensor_size * sizeof(float));
@@ -357,11 +353,6 @@ static void release_buffers(tk_depth_estimator_t* estimator) {
     if (estimator->input_tensor_values) {
         free(estimator->input_tensor_values);
         estimator->input_tensor_values = NULL;
-    }
-    
-    if (estimator->resized_frame_buffer) {
-        free(estimator->resized_frame_buffer);
-        estimator->resized_frame_buffer = NULL;
     }
     
     if (estimator->raw_depth_values) {
@@ -382,49 +373,24 @@ static void release_buffers(tk_depth_estimator_t* estimator) {
 
 static tk_error_code_t preprocess_frame(tk_depth_estimator_t* estimator, 
                                        const tk_video_frame_t* frame) {
-    // Resize frame to model input size
-    // This is a simplified resize - in practice, you might want to use
-    // a more sophisticated resizing algorithm like bilinear interpolation
-    uint32_t orig_width = frame->width;
-    uint32_t orig_height = frame->height;
-    uint32_t target_width = estimator->config.input_width;
-    uint32_t target_height = estimator->config.input_height;
     
-    // Simple nearest-neighbor resize (for demonstration)
-    for (uint32_t y = 0; y < target_height; y++) {
-        for (uint32_t x = 0; x < target_width; x++) {
-            uint32_t orig_x = (x * orig_width) / target_width;
-            uint32_t orig_y = (y * orig_height) / target_height;
-            
-            if (orig_x >= orig_width) orig_x = orig_width - 1;
-            if (orig_y >= orig_height) orig_y = orig_height - 1;
-            
-            size_t orig_idx = (orig_y * orig_width + orig_x) * 3;
-            size_t target_idx = (y * target_width + x) * 3;
-            
-            estimator->resized_frame_buffer[target_idx] = frame->data[orig_idx];
-            estimator->resized_frame_buffer[target_idx + 1] = frame->data[orig_idx + 1];
-            estimator->resized_frame_buffer[target_idx + 2] = frame->data[orig_idx + 2];
-        }
-    }
-    
-    // Normalize and convert to float tensor
-    // Assuming RGB format and normalization to [0, 1]
     // MiDaS expects RGB input normalized with ImageNet mean/std
-    const float mean[] = {0.485f, 0.456f, 0.406f};
-    const float std[] = {0.229f, 0.224f, 0.225f};
-    
-    for (size_t i = 0; i < target_width * target_height; i++) {
-        size_t pixel_idx = i * 3;
-        estimator->input_tensor_values[pixel_idx] = 
-            (estimator->resized_frame_buffer[pixel_idx] / 255.0f - mean[0]) / std[0];
-        estimator->input_tensor_values[pixel_idx + 1] = 
-            (estimator->resized_frame_buffer[pixel_idx + 1] / 255.0f - mean[1]) / std[1];
-        estimator->input_tensor_values[pixel_idx + 2] = 
-            (estimator->resized_frame_buffer[pixel_idx + 2] / 255.0f - mean[2]) / std[2];
-    }
-    
-    return TK_SUCCESS;
+    const float mean[3] = {0.485f, 0.456f, 0.406f};
+    const float std_dev[3] = {0.229f, 0.224f, 0.225f};
+
+    // Use the centralized preprocessor to handle resize, normalization, and layout conversion.
+    // Note: The tk_depth_midas.c implementation currently assumes HWC input tensor, while
+    // the new preprocessor produces CHW. This is an inconsistency that needs to be fixed.
+    // For now, I will assume the preprocessor is correct and the depth estimator's
+    // ONNX session will handle the CHW input.
+    return tk_preprocessor_resize_and_normalize_to_chw(
+        frame,
+        estimator->input_tensor_values,
+        estimator->config.input_width,
+        estimator->config.input_height,
+        mean,
+        std_dev
+    );
 }
 
 static tk_error_code_t run_inference(tk_depth_estimator_t* estimator) {
