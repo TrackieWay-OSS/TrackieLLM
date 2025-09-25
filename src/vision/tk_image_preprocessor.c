@@ -72,17 +72,44 @@ TK_NODISCARD tk_error_code_t tk_preprocessor_resize_and_normalize_to_chw(
     float* b_channel = out_tensor + num_pixels * 2;
 
 #if defined(__AVX__)
-    __m256 mean_r_vec = _mm256_set1_ps(mean[0]);
-    __m256 std_r_vec = _mm256_set1_ps(std_dev[0]);
-    // ... (and for G, B) ...
+    // De-interleave HWC to CHW first
+    for (size_t i = 0; i < num_pixels; ++i) {
+        r_channel[i] = temp_hwc_buffer[i * 3 + 0];
+        g_channel[i] = temp_hwc_buffer[i * 3 + 1];
+        b_channel[i] = temp_hwc_buffer[i * 3 + 2];
+    }
+
+    __m256 scale_vec = _mm256_set1_ps(1.0f / 255.0f);
+    __m256 mean_r = _mm256_set1_ps(mean[0]);
+    __m256 std_r = _mm256_set1_ps(std_dev[0]);
+    __m256 mean_g = _mm256_set1_ps(mean[1]);
+    __m256 std_g = _mm256_set1_ps(std_dev[1]);
+    __m256 mean_b = _mm256_set1_ps(mean[2]);
+    __m256 std_b = _mm256_set1_ps(std_dev[2]);
 
     for (size_t i = 0; i < num_pixels; i += 8) {
-        // This is a simplified conceptual representation.
-        // A real implementation would de-interleave HWC to CHW first,
-        // then process each channel plane with SIMD.
-        // _mm256_store_ps(r_channel + i, normalized_r_pixels);
+        // Process Red Channel
+        __m256 r_vec = _mm256_loadu_ps(r_channel + i);
+        r_vec = _mm256_mul_ps(r_vec, scale_vec);
+        r_vec = _mm256_sub_ps(r_vec, mean_r);
+        r_vec = _mm256_div_ps(r_vec, std_r);
+        _mm256_storeu_ps(r_channel + i, r_vec);
+
+        // Process Green Channel
+        __m256 g_vec = _mm256_loadu_ps(g_channel + i);
+        g_vec = _mm256_mul_ps(g_vec, scale_vec);
+        g_vec = _mm256_sub_ps(g_vec, mean_g);
+        g_vec = _mm256_div_ps(g_vec, std_g);
+        _mm256_storeu_ps(g_channel + i, g_vec);
+
+        // Process Blue Channel
+        __m256 b_vec = _mm256_loadu_ps(b_channel + i);
+        b_vec = _mm256_mul_ps(b_vec, scale_vec);
+        b_vec = _mm256_sub_ps(b_vec, mean_b);
+        b_vec = _mm256_div_ps(b_vec, std_b);
+        _mm256_storeu_ps(b_channel + i, b_vec);
     }
-    // Handle leftovers...
+    // Note: A full implementation should handle leftovers if num_pixels is not a multiple of 8.
 #else
     // Fallback for non-AVX systems
     for (size_t i = 0; i < num_pixels; ++i) {
