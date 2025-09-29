@@ -12,19 +12,28 @@
 
 // --- Public API Implementation ---
 
+#include "tk_model_loader_private.h" // For tk_internal_model_t
+
 tk_error_code_t tk_llm_runner_create(
     tk_llm_runner_t** out_runner,
-    struct llama_model* model,
+    void* model_handle,
     const tk_llm_config_t* config
 ) {
-    if (!out_runner || !model || !config) {
+    if (!out_runner || !model_handle || !config) {
         return TK_ERROR_INVALID_ARGUMENT;
     }
+
+    tk_internal_model_t* internal_model = (tk_internal_model_t*)model_handle;
+    if (internal_model->format != TK_MODEL_FORMAT_GGUF) {
+        return TK_ERROR_INVALID_ARGUMENT;
+    }
+    tk_gguf_handle_t* gguf_handle = (tk_gguf_handle_t*)internal_model->handle;
+    struct llama_model* model = gguf_handle->model;
 
     tk_llm_runner_t* runner = calloc(1, sizeof(tk_llm_runner_t));
     if (!runner) return TK_ERROR_OUT_OF_MEMORY;
 
-    runner->model = model;
+    runner->model = model; // Non-owning pointer
     runner->config = *config;
     if (config->system_prompt) {
         char* p_prompt = strdup(config->system_prompt);

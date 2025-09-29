@@ -16,6 +16,7 @@ add_library(trackie_ai_models_c STATIC
     tk_runner_lifecycle.c
     tk_runner_streaming.c
     tk_runner_helpers.c
+    tk_onnx_runner.c
 )
 
 # The C code needs to be able to find the llama.h header.

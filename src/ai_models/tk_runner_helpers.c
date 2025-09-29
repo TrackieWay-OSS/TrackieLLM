@@ -81,9 +81,47 @@ tk_error_code_t tk_llm_runner_add_tool_response(
     const char* tool_output
 ) {
     if (!runner || !tool_name || !tool_output) return TK_ERROR_INVALID_ARGUMENT;
-    // This function will need a more complex implementation to fit the streaming model,
-    // likely by adding a specific entry type to the history.
-    TK_LOG_INFO("Tool response received for '%s'. Not yet added to history.", tool_name);
+
+    // 1. Format the tool response into a string for the LLM.
+    // The exact format is crucial and should match the prompt engineering strategy.
+    // We use a simple structured format here. Max size for safety.
+    char formatted_response[4096];
+    int written = snprintf(formatted_response, sizeof(formatted_response),
+                           "[TOOL_RESULT] name: \"%s\", output: %s [/TOOL_RESULT]",
+                           tool_name, tool_output);
+    if (written < 0 || (size_t)written >= sizeof(formatted_response)) {
+        TK_LOG_ERROR("Failed to format tool response or output was too long.");
+        return TK_ERROR_INVALID_ARGUMENT;
+    }
+
+    TK_LOG_INFO("Injecting tool response into context: %s", formatted_response);
+
+    // 2. Tokenize the formatted response.
+    int32_t n_ctx = llama_n_ctx(runner->ctx);
+    llama_token* tokens = malloc(sizeof(llama_token) * n_ctx);
+    if (!tokens) return TK_ERROR_OUT_OF_MEMORY;
+
+    int n_tokens = llama_tokenize(runner->model, formatted_response, strlen(formatted_response), tokens, n_ctx, false, true);
+    if (n_tokens < 0) {
+        free(tokens);
+        TK_LOG_ERROR("Failed to tokenize tool response.");
+        return TK_ERROR_INFERENCE_FAILED;
+    }
+
+    // 3. Decode the tokens into the current context.
+    if (llama_decode(runner->ctx, llama_batch_get_one(tokens, n_tokens, runner->n_past, 0))) {
+        free(tokens);
+        TK_LOG_ERROR("llama_decode failed on tool response.");
+        return TK_ERROR_INFERENCE_FAILED;
+    }
+
+    // 4. Update the context position.
+    runner->n_past += n_tokens;
+    free(tokens);
+
+    // The runner is now ready to generate the next text token based on the tool's output.
+    runner->is_processing = true;
+
     return TK_SUCCESS;
 }
 

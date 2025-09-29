@@ -83,20 +83,23 @@ typedef struct {
     bool is_loaded;
 } tk_internal_model_t;
 
+#include "tk_memory_manager.h"
+
 // Internal structure for model loader context
 struct tk_model_loader_s {
-    tk_model_loader_config_t config; // Configuration
-    tk_internal_model_t* loaded_models; // Array of loaded models
-    size_t loaded_model_count;       // Number of currently loaded models
-    size_t max_loaded_models;        // Maximum number of loadable models
-    uint64_t cache_hits;             // Number of cache hits
-    uint64_t cache_misses;           // Number of cache misses
-    uint64_t total_loads;            // Total number of model loads
-    uint64_t total_unloads;          // Total number of model unloads
-    size_t cache_size_bytes;         // Current cache size in bytes
-    char* temp_dir;                  // Temporary directory path
-    char* cache_dir;                 // Cache directory path
-    void* framework_contexts[8];     // Framework-specific contexts
+    tk_model_loader_config_t config;
+    tk_internal_model_t* loaded_models;
+    size_t loaded_model_count;
+    size_t max_loaded_models;
+    uint64_t cache_hits;
+    uint64_t cache_misses;
+    uint64_t total_loads;
+    uint64_t total_unloads;
+    size_t cache_size_bytes;
+    char* temp_dir;
+    char* cache_dir;
+    void* framework_contexts[8];
+    tk_memory_manager_t* memory_manager; // The new memory manager
 };
 
 // Internal helper functions
@@ -205,8 +208,36 @@ static tk_error_code_t load_model_gguf(tk_model_loader_t* loader, const tk_model
         return TK_SUCCESS;
     }
 
+    // --- New Eviction Logic ---
+    uint64_t required_bytes = get_file_size(params->model_path->path_str);
+    tk_internal_model_t* model_to_evict = NULL;
+
+    // Check if we need to evict a model.
+    // This is determined by the memory manager based on current usage and required size.
+    // 1. Build list of candidates for eviction (models not in use).
+    tk_internal_model_t* candidates[MAX_LOADED_MODELS];
+    size_t candidate_count = 0;
+    for (size_t i = 0; i < loader->max_loaded_models; i++) {
+        if (loader->loaded_models[i].is_loaded && loader->loaded_models[i].reference_count == 0) {
+            candidates[candidate_count++] = &loader->loaded_models[i];
+        }
+    }
+
+    // 2. Ask memory manager to select one if needed.
+    model_to_evict = tk_memory_manager_select_model_for_eviction(
+        loader->memory_manager, candidates, candidate_count, required_bytes);
+
+    if (model_to_evict) {
+        // 3. Evict the selected model.
+        unload_model_internal(loader, model_to_evict);
+    }
+    // --- End of New Eviction Logic ---
+
     model = find_available_model_slot(loader);
-    if (!model) return TK_ERROR_RESOURCE_EXHAUSTED;
+    if (!model) {
+        TK_LOG_ERROR("Could not load model %s, not enough memory and no suitable eviction candidate found.", params->model_path->path_str);
+        return TK_ERROR_RESOURCE_EXHAUSTED;
+    }
 
     tk_gguf_handle_t* gguf_handle = calloc(1, sizeof(tk_gguf_handle_t));
     if (!gguf_handle) return TK_ERROR_OUT_OF_MEMORY;
@@ -225,6 +256,26 @@ static tk_error_code_t load_model_gguf(tk_model_loader_t* loader, const tk_model
         return TK_ERROR_MODEL_LOAD_FAILED;
     }
 
+    // Apply LoRA adapter if provided
+    if (params->lora_adapter && strlen(params->lora_adapter) > 0) {
+        TK_LOG_INFO("Applying LoRA adapter from: %s", params->lora_adapter);
+        int err = llama_model_apply_lora_from_file(gguf_handle->model, params->lora_adapter, NULL, NULL, params->cpu_threads);
+        if (err != 0) {
+            TK_LOG_ERROR("Failed to apply LoRA adapter. Error code: %d", err);
+            llama_free_model(gguf_handle->model);
+            free(gguf_handle);
+            llama_backend_free();
+            return TK_ERROR_MODEL_LOAD_FAILED;
+        }
+    }
+
+    if (!gguf_handle->model) { // Double check after potential LoRA failure
+        TK_LOG_ERROR("Model handle became null after LoRA application attempt.");
+        free(gguf_handle);
+        llama_backend_free();
+        return TK_ERROR_MODEL_LOAD_FAILED;
+    }
+
     model->handle = gguf_handle;
     model->format = TK_MODEL_FORMAT_GGUF;
     model->is_loaded = true;
@@ -234,6 +285,7 @@ static tk_error_code_t load_model_gguf(tk_model_loader_t* loader, const tk_model
     model->path[MAX_PATH_LENGTH - 1] = '\0';
     
     extract_model_metadata(model);
+    tk_memory_manager_confirm_allocation(loader->memory_manager, model);
 
     *out_handle = model;
     loader->total_loads++;
@@ -253,8 +305,31 @@ static tk_error_code_t load_model_onnx(tk_model_loader_t* loader, const tk_model
         return TK_SUCCESS;
     }
 
+    // --- New Eviction Logic ---
+    uint64_t required_bytes = get_file_size(params->model_path->path_str);
+    tk_internal_model_t* model_to_evict = NULL;
+
+    tk_internal_model_t* candidates[MAX_LOADED_MODELS];
+    size_t candidate_count = 0;
+    for (size_t i = 0; i < loader->max_loaded_models; i++) {
+        if (loader->loaded_models[i].is_loaded && loader->loaded_models[i].reference_count == 0) {
+            candidates[candidate_count++] = &loader->loaded_models[i];
+        }
+    }
+
+    model_to_evict = tk_memory_manager_select_model_for_eviction(
+        loader->memory_manager, candidates, candidate_count, required_bytes);
+
+    if (model_to_evict) {
+        unload_model_internal(loader, model_to_evict);
+    }
+    // --- End of New Eviction Logic ---
+
     model = find_available_model_slot(loader);
-    if (!model) return TK_ERROR_RESOURCE_EXHAUSTED;
+    if (!model) {
+        TK_LOG_ERROR("Could not load model %s, not enough memory and no suitable eviction candidate found.", params->model_path->path_str);
+        return TK_ERROR_RESOURCE_EXHAUSTED;
+    }
 
     tk_onnx_handle_t* onnx_handle = calloc(1, sizeof(tk_onnx_handle_t));
     if (!onnx_handle) return TK_ERROR_OUT_OF_MEMORY;
@@ -263,10 +338,26 @@ static tk_error_code_t load_model_onnx(tk_model_loader_t* loader, const tk_model
     
     OrtSessionOptions* session_options;
     ORT_CHECK(g_ort->CreateSessionOptions(&session_options));
-    ORT_CHECK(g_ort->SetIntraOpNumThreads(session_options, params->cpu_threads));
+    ORT_CHECK(g_ort->SetIntraOpNumThreads(session_options, params->cpu_threads > 0 ? params->cpu_threads : loader->config.num_threads));
 
-    // NOTE: The ORT_CHECK macro returns on failure, so we must release session_options manually before that.
-    // A better approach would be a goto-based cleanup, but for now we'll be careful.
+    // Enable GPU acceleration if requested
+    if (params->prefer_gpu) {
+        TK_LOG_INFO("Attempting to enable CUDA execution provider for ONNX model.");
+        OrtCUDAProviderOptions cuda_options = {0};
+        // cuda_options.device_id = loader->config.gpu_device_id; // Set device ID if needed
+        OrtStatus* cuda_status = g_ort->SessionOptionsAppendExecutionProvider_CUDA(session_options, &cuda_options);
+        if (cuda_status != NULL) {
+            TK_LOG_WARN("Failed to add CUDA execution provider: %s", g_ort->GetErrorMessage(cuda_status));
+            g_ort->ReleaseStatus(cuda_status);
+        } else {
+            TK_LOG_INFO("CUDA execution provider enabled successfully.");
+        }
+    }
+
+    // Set graph optimization level
+    // Using a sensible default. This could also be a parameter in tk_model_load_params_t.
+    ORT_CHECK(g_ort->SetSessionGraphOptimizationLevel(session_options, ORT_ENABLE_ALL));
+
     OrtStatus* status = g_ort->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "trackiellm", &onnx_handle->env);
     if (status != NULL) {
         g_ort->ReleaseSessionOptions(session_options);
@@ -292,6 +383,7 @@ static tk_error_code_t load_model_onnx(tk_model_loader_t* loader, const tk_model
     model->path[MAX_PATH_LENGTH - 1] = '\0';
 
     extract_model_metadata(model);
+    tk_memory_manager_confirm_allocation(loader->memory_manager, model);
 
     *out_handle = model;
     loader->total_loads++;
@@ -316,6 +408,7 @@ static tk_error_code_t unload_model_internal(tk_model_loader_t* loader, void* mo
 
     if (model->is_loaded && model->reference_count == 0) {
         TK_LOG_INFO("Unloading model: %s", model->path);
+        tk_memory_manager_confirm_deallocation(loader->memory_manager, model);
         if (model->format == TK_MODEL_FORMAT_GGUF) {
             tk_gguf_handle_t* handle = (tk_gguf_handle_t*)model->handle;
             if (handle) {
@@ -329,9 +422,19 @@ static tk_error_code_t unload_model_internal(tk_model_loader_t* loader, void* mo
                 const OrtApi* g_ort = OrtGetApiBase()->GetApi(ORT_API_VERSION);
                 if(g_ort) {
                     // Free metadata strings
-                    for (size_t i = 0; i < handle->input_count; i++) free(handle->input_names[i]);
-                    free(handle->input_names);
-                    // ... and other metadata arrays ...
+                    if (handle->input_names) {
+                        for (size_t i = 0; i < handle->input_count; i++) {
+                            // These strings are allocated by the ORT allocator
+                            handle->allocator->Free(handle->allocator, handle->input_names[i]);
+                        }
+                        free(handle->input_names);
+                    }
+                    if (handle->output_names) {
+                        for (size_t i = 0; i < handle->output_count; i++) {
+                            handle->allocator->Free(handle->allocator, handle->output_names[i]);
+                        }
+                        free(handle->output_names);
+                    }
 
                     g_ort->ReleaseSession(handle->session);
                     g_ort->ReleaseEnv(handle->env);
@@ -365,41 +468,22 @@ static tk_internal_model_t* find_loaded_model(tk_model_loader_t* loader, const c
 }
 
 /**
- * @brief Finds an available model slot
+ * @brief Finds a free, unused model slot in the loader's model array.
+ *
+ * This function does not perform any eviction. It simply looks for a slot
+ * that is not marked as loaded. It should be called after the eviction
+ * logic has already been run to ensure a slot is free.
  */
 static tk_internal_model_t* find_available_model_slot(tk_model_loader_t* loader) {
     if (!loader) return NULL;
-    
-    // First try to find an empty slot
+
     for (size_t i = 0; i < loader->max_loaded_models; i++) {
         if (!loader->loaded_models[i].is_loaded) {
             return &loader->loaded_models[i];
         }
     }
-    
-    // If no empty slots, try to evict the least recently used model
-    // This is a simple LRU implementation - in practice, you might want a more sophisticated cache eviction policy
-    tk_internal_model_t* lru_model = NULL;
-    time_t oldest_time = time(NULL);
-    
-    for (size_t i = 0; i < loader->max_loaded_models; i++) {
-        if (loader->loaded_models[i].is_loaded && 
-            loader->loaded_models[i].reference_count == 0 && 
-            loader->loaded_models[i].load_time < oldest_time) {
-            oldest_time = loader->loaded_models[i].load_time;
-            lru_model = &loader->loaded_models[i];
-        }
-    }
-    
-    // If we found an LRU model with zero references, evict it
-    if (lru_model) {
-        TK_LOG_INFO("Evicting LRU model: %s", lru_model->path);
-        unload_model_internal(loader, lru_model);
-        return lru_model;
-    }
-    
-    // No available slots
-    return NULL;
+
+    return NULL; // No free slots found.
 }
 
 /**
@@ -680,14 +764,6 @@ static void free_model_metadata(tk_model_metadata_t* metadata) {
     free_string(metadata->checksum);
     free_string(metadata->validation_message);
     
-    if (metadata->input_dims) {
-        free(metadata->input_dims);
-    }
-    
-    if (metadata->output_dims) {
-        free(metadata->output_dims);
-    }
-    
     if (metadata->supported_languages) {
         for (uint32_t i = 0; i < metadata->language_count; i++) {
             free_string(metadata->supported_languages[i]);
@@ -733,30 +809,54 @@ static tk_error_code_t parse_onnx_metadata(const char* model_path, tk_model_meta
     if (!model_path || !metadata || !handle) return TK_ERROR_INVALID_ARGUMENT;
 
     const OrtApi* g_ort = OrtGetApiBase()->GetApi(ORT_API_VERSION);
+    OrtAllocator* allocator = handle->allocator;
 
+    // Get model metadata (name, description, etc.)
+    OrtModelMetadata* model_metadata;
+    ORT_CHECK(g_ort->SessionGetModelMetadata(handle->session, &model_metadata));
+
+    char* model_name;
+    ORT_CHECK(g_ort->ModelMetadataGetProducerName(model_metadata, allocator, &model_name));
+    metadata->name = duplicate_string(model_name);
+    g_ort->AllocatorFree(allocator, model_name);
+
+    char* model_desc;
+    ORT_CHECK(g_ort->ModelMetadataGetDescription(model_metadata, allocator, &model_desc));
+    metadata->description = duplicate_string(model_desc);
+    g_ort->AllocatorFree(allocator, model_desc);
+
+    g_ort->ReleaseModelMetadata(model_metadata);
+
+    // Get input and output counts
     ORT_CHECK(g_ort->SessionGetInputCount(handle->session, &handle->input_count));
     ORT_CHECK(g_ort->SessionGetOutputCount(handle->session, &handle->output_count));
+    metadata->input_count = handle->input_count;
+    metadata->output_count = handle->output_count;
 
+    // Allocate memory for names
     handle->input_names = calloc(handle->input_count, sizeof(char*));
     if (!handle->input_names) return TK_ERROR_OUT_OF_MEMORY;
+    handle->output_names = calloc(handle->output_count, sizeof(char*));
+    if (!handle->output_names) {
+        free(handle->input_names);
+        return TK_ERROR_OUT_OF_MEMORY;
+    }
 
+    // Extract input details
     for (size_t i = 0; i < handle->input_count; i++) {
-        ORT_CHECK(g_ort->SessionGetInputName(handle->session, i, handle->allocator, &handle->input_names[i]));
-
-        OrtTypeInfo* type_info;
-        ORT_CHECK(g_ort->SessionGetInputTypeInfo(handle->session, i, &type_info));
-        // In a full implementation, you would extract shape and type from type_info.
-        g_ort->ReleaseTypeInfo(type_info);
+        ORT_CHECK(g_ort->SessionGetInputName(handle->session, i, allocator, &handle->input_names[i]));
+        // In a full implementation, one would also extract type and shape here
+        // and populate metadata->inputs array.
     }
     
-    // TODO: Repeat for outputs.
+    // Extract output details
+    for (size_t i = 0; i < handle->output_count; i++) {
+        ORT_CHECK(g_ort->SessionGetOutputName(handle->session, i, allocator, &handle->output_names[i]));
+    }
 
-    metadata->name = duplicate_string("ONNX Model");
-    metadata->type = TK_MODEL_TYPE_UNKNOWN;
+    metadata->type = TK_MODEL_TYPE_UNKNOWN; // Could try to infer from metadata tags
     metadata->format = TK_MODEL_FORMAT_ONNX;
     metadata->size_bytes = get_file_size(model_path);
-    metadata->input_dim_count = handle->input_count;
-    metadata->output_dim_count = handle->output_count;
     metadata->is_valid = true;
 
     return TK_SUCCESS;
@@ -887,6 +987,18 @@ tk_error_code_t tk_model_loader_create(tk_model_loader_t** out_loader, const tk_
     loader->total_loads = 0;
     loader->total_unloads = 0;
     loader->cache_size_bytes = 0;
+
+    // Create memory manager
+    tk_memory_manager_config_t mem_config = {
+        .max_ram_mb = loader->config.cache_size_mb,
+        .max_vram_mb = 0 // VRAM not managed yet
+    };
+    result = tk_memory_manager_create(&loader->memory_manager, &mem_config);
+    if (result != TK_SUCCESS) {
+        // ... cleanup previously allocated resources ...
+        free(loader);
+        return result;
+    }
     
     *out_loader = loader;
     TK_LOG_INFO("Model loader created successfully");
@@ -905,6 +1017,9 @@ void tk_model_loader_destroy(tk_model_loader_t** loader) {
         }
     }
     
+    // Destroy the memory manager
+    tk_memory_manager_destroy(&l->memory_manager);
+
     // Clean up framework contexts
     cleanup_framework_contexts(l);
     
@@ -1126,17 +1241,38 @@ tk_error_code_t tk_model_loader_optimize_model(
     if (!loader || !model_handle) {
         return TK_ERROR_INVALID_ARGUMENT;
     }
-    
+
     tk_internal_model_t* model = (tk_internal_model_t*)model_handle;
     if (!model->is_loaded) {
         return TK_ERROR_NOT_FOUND;
     }
-    
-    // This would implement actual model optimization in a real implementation
-    TK_LOG_INFO("Optimizing model %s with level %u", model->path, optimization_level);
-    
-    // For now, we'll just log the optimization
-    TK_LOG_INFO("Model optimization completed successfully");
+
+    TK_LOG_INFO("Attempting to optimize model %s with level %u", model->path, optimization_level);
+
+    if (model->format == TK_MODEL_FORMAT_ONNX) {
+        tk_onnx_handle_t* handle = (tk_onnx_handle_t*)model->handle;
+        if (!handle || !handle->session) {
+            return TK_ERROR_INVALID_ARGUMENT;
+        }
+
+        // ONNX Runtime optimization is typically set at session creation.
+        // Reloading the model with new session options is the standard way.
+        // This function will log a warning and guide the user.
+        TK_LOG_WARN("For ONNX models, optimization is applied at load time.");
+        TK_LOG_WARN("To use GPU or specific optimization levels, please re-load the model with the appropriate 'tk_model_load_params_t'.");
+
+        // A more advanced implementation could potentially create a new session here,
+        // but that would complicate state management significantly.
+        // For now, we consider this a user guidance function.
+
+        return TK_ERROR_UNSUPPORTED_OPERATION; // Indicate that dynamic optimization is not supported.
+
+    } else if (model->format == TK_MODEL_FORMAT_GGUF) {
+        TK_LOG_INFO("GGUF model optimization is configured at load time via parameters like 'n_gpu_layers'.");
+        return TK_SUCCESS;
+    }
+
+    TK_LOG_WARN("Optimization is not applicable or implemented for this model format.");
     return TK_SUCCESS;
 }
 
