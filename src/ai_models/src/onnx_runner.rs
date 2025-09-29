@@ -1,115 +1,133 @@
 /*
- * Copyright (C) 2025 Pedro Henrique / phdev13
+ * Copyright (C) 2025 TrackieWay-OSS
  *
- * File: src/ai_models/onnx_runner.rs
+ * This file is part of TrackieLLM.
  *
- * This file provides a safe, pure-Rust interface for running models in the ONNX
- * (Open Neural Network Exchange) format using the `tract-onnx` inference engine.
- * This approach avoids FFI, enhancing safety and simplifying the toolchain.
+ * This file provides a safe Rust wrapper for the ONNX C++ backend.
  *
- * The `OnnxRunner` is responsible for the entire lifecycle of an ONNX model,
- * from loading and optimization to inference. It is suitable for non-LLM tasks
- * such as computer vision, audio processing, etc.
- *
- * ## Safety
- * This module is written in 100% safe Rust and has no `unsafe` blocks. All
- * interactions with low-level tensor operations are managed by the `tract` crate.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-use crate::AiModelsError;
-use std::path::Path;
-use tract_onnx::prelude::*;
-use tract_onnx::tract_core::downcast_rs::Downcast;
+use super::{ffi, loader::Model, AiModelsError};
+use std::ptr::{null_mut, NonNull};
+use std::marker::PhantomData;
 
-/// A new Tensor struct that wraps tract's Tensor.
-/// This abstracts the underlying tensor library from the user of OnnxRunner.
-#[derive(Clone, Debug)]
-pub struct Tensor(pub tract_onnx::prelude::Tensor);
+// Re-export the data type enum for convenience.
+pub use super::ffi::ONNXTensorElementDataType;
 
-/// Configuration for initializing an `OnnxRunner`.
-#[derive(Debug, Clone)]
-pub struct OnnxConfig {
-    /// The execution provider to use. (Note: tract primarily uses CPU)
-    pub execution_provider: ExecutionProvider,
+/// A safe wrapper for a `tk_tensor_t` pointer.
+/// It owns the C-level tensor and will free it on Drop.
+pub struct Tensor {
+    ptr: NonNull<ffi::tk_tensor_t>,
 }
 
-/// Defines the available execution providers for ONNX models.
-/// Note: `tract` is mainly a CPU engine, so these are conceptual for API compatibility.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExecutionProvider {
-    /// Use the CPU for inference.
-    Cpu,
+impl Tensor {
+    /// Creates a new input tensor from a raw data slice.
+    pub fn new<T>(data: &mut [T], shape: &[i64], data_type: ONNXTensorElementDataType) -> Result<Self, AiModelsError> {
+        let mut ptr = null_mut();
+        let code = unsafe {
+            ffi::tk_tensor_create_from_raw(
+                &mut ptr,
+                data.as_mut_ptr() as *mut std::ffi::c_void,
+                shape.as_ptr(),
+                shape.len(),
+                data_type,
+            )
+        };
+
+        if code != ffi::TK_SUCCESS {
+            return Err(AiModelsError::OnnxRunnerFailed(format!(
+                "FFI call to tk_tensor_create_from_raw failed with code {}", code
+            )));
+        }
+
+        Ok(Self {
+            ptr: NonNull::new(ptr).expect("C API returned null tensor on success"),
+        })
+    }
 }
 
-/// A safe, high-level runner for ONNX-based models, using the `tract` engine.
+impl Drop for Tensor {
+    fn drop(&mut self) {
+        unsafe { ffi::tk_tensor_destroy(&mut self.ptr.as_ptr()) };
+    }
+}
+
+
+/// A handle to the C-level `tk_onnx_runner_t`.
+#[derive(Debug)]
+struct RunnerHandle(NonNull<ffi::tk_onnx_runner_t>);
+unsafe impl Send for RunnerHandle {}
+unsafe impl Sync for RunnerHandle {}
+
+use std::sync::Arc;
+
+/// A safe, high-level runner for ONNX-based models, using the C++ backend.
 #[derive(Debug)]
 pub struct OnnxRunner {
-    model: SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>,
+    handle: RunnerHandle,
+    // Keep a strong reference to the model to ensure it outlives the runner.
+    _model: Arc<Model>,
 }
 
 impl OnnxRunner {
-    /// Creates a new `OnnxRunner` by loading and optimizing an ONNX model from a file.
-    ///
-    /// # Arguments
-    ///
-    /// * `_config` - Configuration for the runner (currently unused by tract's simple API).
-    /// * `model_path` - The file path to the ONNX model.
-    pub fn new(_config: OnnxConfig, model_path: &Path) -> Result<Self, AiModelsError> {
-        log::info!(
-            "Initializing ONNX runner for model path: {:?}",
-            model_path
-        );
-
-        // Tract's builder pattern to load, type-check, optimize, and make the model runnable.
-        let model = tract_onnx::onnx()
-            .model_for_path(model_path)?
-            .into_optimized()?
-            .into_runnable()?;
-
-        Ok(Self { model })
+    pub fn new(model: Arc<Model>) -> Result<Self, AiModelsError> {
+        let mut ptr = null_mut();
+        let code = unsafe { ffi::tk_onnx_runner_create(&mut ptr, model.handle.as_ptr()) };
+        if code != ffi::TK_SUCCESS {
+            return Err(AiModelsError::OnnxRunnerFailed(format!(
+                "FFI call to tk_onnx_runner_create failed with code {}", code
+            )));
+        }
+        Ok(Self {
+            handle: RunnerHandle(NonNull::new(ptr).expect("C API returned null pointer on success")),
+            _model: model,
+        })
     }
 
     /// Runs inference on the loaded ONNX model.
-    ///
-    /// # Arguments
-    ///
-    /// * `inputs` - A slice of input tensors. The number and shape of these
-    ///   tensors must match the model's expected inputs.
-    ///
-    /// # Returns
-    ///
-    /// A `Vec<Tensor>` containing the model's output tensors.
     pub fn run(&self, inputs: &[Tensor]) -> Result<Vec<Tensor>, AiModelsError> {
-        log::debug!("Running ONNX inference with {} input tensor(s).", inputs.len());
+        let input_ptrs: Vec<*const ffi::tk_tensor_t> = inputs.iter().map(|t| t.ptr.as_ptr()).collect();
+        let mut output_ptrs = null_mut();
+        let mut output_count = 0;
 
-        if inputs.is_empty() {
-            return Err(AiModelsError::InferenceFailed(
-                "At least one input tensor is required.".to_string(),
-            ));
+        let code = unsafe {
+            ffi::tk_onnx_runner_run(
+                self.handle.0.as_ptr(),
+                input_ptrs.as_ptr(),
+                input_ptrs.len(),
+                &mut output_ptrs,
+                &mut output_count,
+            )
+        };
+
+        if code != ffi::TK_SUCCESS {
+            return Err(AiModelsError::InferenceFailed(format!(
+                "ONNX inference failed with code {}", code
+            )));
         }
 
-        // Convert our `Tensor` wrappers into the `TValue` (`Arc<dyn Datum>`) that tract expects.
-        let tract_inputs: TVec<TValue> =
-            inputs.iter().map(|t| t.0.clone().into()).collect();
+        // The C side allocates an array of pointers, and a tensor for each pointer.
+        // We need to take ownership of these and manage their lifecycle.
+        let outputs = unsafe {
+            let slice = std::slice::from_raw_parts_mut(output_ptrs, output_count);
+            slice.iter_mut().map(|ptr| {
+                Tensor { ptr: NonNull::new(*ptr).unwrap() }
+            }).collect()
+        };
 
-        let result_tensors = self.model.run(tract_inputs)?;
+        // Now that the Vec<Tensor> owns the individual tensors, we can free the
+        // outer array that held the pointers.
+        unsafe {
+            ffi::tk_onnx_runner_free_outputs(output_ptrs, output_count);
+        }
 
-        // Downcast the resulting `TValue`s back to concrete `tract_onnx::prelude::Tensor`s
-        // and wrap them in our public `Tensor` type.
-        let outputs: Result<Vec<Tensor>, _> = result_tensors
-            .into_iter()
-            .map(|t| {
-                t.as_any()
-                    .downcast_ref::<tract_onnx::prelude::Tensor>()
-                    .ok_or_else(|| {
-                        AiModelsError::InferenceFailed(
-                            "Failed to downcast output tensor to concrete type".to_string(),
-                        )
-                    })
-                    .map(|tensor| Tensor(tensor.clone()))
-            })
-            .collect();
+        Ok(outputs)
+    }
+}
 
-        outputs
+impl Drop for OnnxRunner {
+    fn drop(&mut self) {
+        unsafe { ffi::tk_onnx_runner_destroy(&mut self.handle.0.as_ptr()) };
     }
 }

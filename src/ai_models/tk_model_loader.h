@@ -90,10 +90,8 @@ typedef struct {
     tk_model_type_e type;      /**< Model type */
     tk_model_format_e format;  /**< Model format */
     uint64_t size_bytes;       /**< Model file size in bytes */
-    uint32_t input_dim_count;  /**< Number of input dimensions */
-    uint32_t* input_dims;      /**< Input dimensions array */
-    uint32_t output_dim_count; /**< Number of output dimensions */
-    uint32_t* output_dims;     /**< Output dimensions array */
+    uint32_t input_count;      /**< Number of model inputs */
+    uint32_t output_count;     /**< Number of model outputs */
     uint32_t parameter_count;  /**< Number of parameters (in millions) */
     uint32_t context_length;   /**< Context length for LLMs */
     uint32_t embedding_dim;    /**< Embedding dimension */
@@ -279,6 +277,7 @@ typedef struct {
     bool no_kv_offload;        /**< Disable KV offloading */
     char* cache_type_k;        /**< Cache type for K */
     char* cache_type_v;        /**< Cache type for V */
+    char* lora_adapter;        /**< Path to LoRA adapter */
     bool dry_run;              /**< Perform dry run without actual loading */
     char* export_dir;          /**< Export directory for converted models */
     bool prefer_cpu;           /**< Prefer CPU over GPU */

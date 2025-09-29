@@ -84,7 +84,34 @@ mod ffi {
     pub type tk_model_loader_t = tk_model_loader_s;
     pub enum tk_llm_runner_s {}
     pub type tk_llm_runner_t = tk_llm_runner_s;
+    pub enum tk_onnx_runner_s {}
+    pub type tk_onnx_runner_t = tk_onnx_runner_s;
+    pub enum tk_tensor_s {}
+    pub type tk_tensor_t = tk_tensor_s;
+
+    #[repr(C)]
+    pub enum ONNXTensorElementDataType {
+        ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED,
+        ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
+        ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8,
+        ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8,
+        ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT16,
+        ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16,
+        ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32,
+        ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64,
+        ONNX_TENSOR_ELEMENT_DATA_TYPE_STRING,
+        ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL,
+        ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16,
+        ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE,
+        ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT32,
+        ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT64,
+        ONNX_TENSOR_ELEMENT_DATA_TYPE_COMPLEX64,
+        ONNX_TENSOR_ELEMENT_DATA_TYPE_COMPLEX128,
+        ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16,
+    }
+
     pub enum llama_model {}
+    pub enum llama_sampling_context {}
     pub enum tk_path_s {}
     pub type tk_path_t = tk_path_s;
 
@@ -116,6 +143,7 @@ mod ffi {
         pub use_mlock: bool,
         pub numa: bool,
         pub seed: u32,
+        pub lora_adapter: *const std::os::raw::c_char,
     }
 
     #[repr(C)]
@@ -137,11 +165,24 @@ mod ffi {
         pub fn tk_model_loader_load_model(loader: *mut tk_model_loader_t, params: *const tk_model_load_params_t, out_model_handle: *mut *mut std::ffi::c_void) -> tk_error_code_t;
         pub fn tk_model_loader_unload_model(loader: *mut tk_model_loader_t, model_handle: *mut *mut std::ffi::c_void) -> tk_error_code_t;
 
-        // tk_model_runner.h
-        pub fn tk_llm_runner_create(out_runner: *mut *mut tk_llm_runner_t, model: *mut llama_model, config: *const tk_llm_config_t) -> tk_error_code_t;
+        // tk_model_runner.h & tk_runner_helpers.h
+        pub fn tk_llm_runner_create(out_runner: *mut *mut tk_llm_runner_t, model_handle: *mut std::ffi::c_void, config: *const tk_llm_config_t) -> tk_error_code_t;
         pub fn tk_llm_runner_destroy(runner: *mut *mut tk_llm_runner_t);
         pub fn tk_llm_runner_prepare_generation(runner: *mut tk_llm_runner_t, prompt: *const std::os::raw::c_char, use_tool_grammar: bool) -> tk_error_code_t;
         pub fn tk_llm_runner_generate_next_token(runner: *mut tk_llm_runner_t) -> *const std::os::raw::c_char;
+        pub fn tk_llm_runner_add_tool_response(runner: *mut tk_llm_runner_t, tool_name: *const std::os::raw::c_char, tool_output: *const std::os::raw::c_char) -> tk_error_code_t;
+
+        // tk_onnx_runner.h
+        pub fn tk_onnx_runner_create(out_runner: *mut *mut tk_onnx_runner_t, model_handle: *mut std::ffi::c_void) -> tk_error_code_t;
+        pub fn tk_onnx_runner_destroy(runner: *mut *mut tk_onnx_runner_t);
+        pub fn tk_onnx_runner_run(runner: *mut tk_onnx_runner_t, inputs: *const *const tk_tensor_t, input_count: usize, outputs: *mut *mut *mut tk_tensor_t, output_count: *mut usize) -> tk_error_code_t;
+        pub fn tk_tensor_create_from_raw(out_tensor: *mut *mut tk_tensor_t, data: *mut std::ffi::c_void, shape: *const i64, shape_len: usize, data_type: ONNXTensorElementDataType) -> tk_error_code_t;
+        pub fn tk_tensor_destroy(tensor: *mut *mut tk_tensor_t);
+        pub fn tk_onnx_runner_free_outputs(outputs: *mut *mut tk_tensor_t, output_count: usize);
+
+        // Function from llama.cpp to get the string generated that conforms to the grammar.
+        // This is a realistic function to expect in a custom llama.cpp build for tool use.
+        pub fn llama_sampling_get_post_grammar_str(sctx: *mut llama_sampling_context) -> *const std::os::raw::c_char;
     }
 }
 

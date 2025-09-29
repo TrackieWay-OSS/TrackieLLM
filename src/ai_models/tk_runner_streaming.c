@@ -50,6 +50,10 @@ tk_error_code_t tk_llm_runner_prepare_generation(
     return TK_SUCCESS;
 }
 
+// Special pointer value to indicate a tool call has completed.
+// The Rust side will check for this specific address.
+#define TK_TOOL_CALL_TOKEN ((const char*)1)
+
 const char* tk_llm_runner_generate_next_token(tk_llm_runner_t* runner) {
     if (!runner || !runner->is_processing) return NULL;
 
@@ -58,7 +62,16 @@ const char* tk_llm_runner_generate_next_token(tk_llm_runner_t* runner) {
 
     if (id == llama_token_eos(runner->model)) {
         runner->is_processing = false;
-        return NULL;
+        return NULL; // End of Stream
+    }
+
+    // Check if the grammar rule for a tool call has just been completed.
+    if (runner->grammar != NULL && llama_sampling_prev_token_is_term(runner->sctx)) {
+        TK_LOG_INFO("Tool call grammar rule completed. Signaling tool call.");
+        // We don't advance the context yet. The tool call content is in the sampling context.
+        // The Rust side will now read the tool call string, and then call add_tool_response.
+        runner->is_processing = false; // Pause processing until tool response is added
+        return TK_TOOL_CALL_TOKEN;
     }
 
     if (llama_decode(runner->ctx, llama_batch_get_one(&id, 1, runner->n_past, 0))) {
